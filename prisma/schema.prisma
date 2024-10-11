@@ -1,0 +1,354 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  createdAt DateTime @default(now())
+}
+
+model Cooperative {
+  id                    String   @id @default(uuid())
+  cooperativeName       String   @unique
+  email                 String   @unique
+  cooperativeDetails    CooperativeDetails[]
+  members               Member[]      // One-to-many relation to members
+  savings               MemberSavings[] // One-to-many relation to MemberSavings
+  loansRequested        LoansRequested[] // One-to-many relation to LoansRequested
+  loansApproved         LoansApproved[] // One-to-many relation to LoansApproved
+  debtors               Debtor[]         // One-to-many relation to Debtor
+  roles                 Role[]         // One-to-many relation to Role
+
+  createdAt             DateTime @default(now())
+}
+
+model CooperativeDetails{
+  cooperativeId          String    // Foreign key to Cooperative
+     cooperativeName       String?  
+       email                 String?   
+  registrationNumber    String   @unique
+  dateOfIncorporation   DateTime
+  cooperative            Cooperative?  @relation(fields: [cooperativeId], references: [id])
+  address               String
+  phoneNumber           String   
+  totalSavings          Float?   @default(0)       // Aggregate of all members' savings
+  totalDebt             Float?     @default(0)     // Aggregate of all loans/debts
+  totalLoansRequested   Float?    @default(0)      // Total sum of loans requested
+  totalLoansApproved    Float?    @default(0)      // Total sum of loans approved
+  totalMembers              String?      @default("") 
+  totalDebtors              String?  @default("") 
+  totalProfit           Float?      @default(0)    // Total profit or surplus
+  directorName              String
+  directorPosition          String
+  directorEmail             String  
+  directorPhoneNumber       String
+  directorDateOfBirth       DateTime  // Fixed typo
+  directorPlaceOfBirth      String
+  directorNationality       String
+  directorOccupation        String
+  directorBVNNumber         String
+  directorIDType            IDTYPE
+  directorIDNumber          String
+  directorIssuedDate        String
+  directorExpiryDate        String
+  directorSourceOfIncome    SourceOFincome
+}
+
+
+model Member {
+  id                String   @id @default(uuid())
+  // img               String // <-- This field is required
+  surname           String
+  cooperativeId     String?
+  firstName         String
+  email             String   @unique
+  savings           MemberSavings[] // Relation to MemberSavings
+  cooperative       Cooperative? @relation(fields: [cooperativeId], references: [id])
+  memberDetails     MembersDetails?  // One-to-one relation with MemberDetails (KYC)
+  roles             Role[]          // One-to-many relation with Role
+  debtors           Debtor[]        // One-to-many relation with Debtor
+  loansRequested    LoansRequested[] // One-to-many relation to LoansRequested
+  loansApproved     LoansApproved[]  // One-to-many relation to LoansApproved
+  membersFinancialPosition MembersFinancialPosition? // Financial position linked to the member
+  personalLedgers   personalLedgers[] // Access to personal ledger
+}
+
+model MembersDetails {
+id                String   @id @default(uuid())
+ cooperativeId     String?
+member            Member   @relation(fields: [memberId], references: [id]) // One-to-one relation
+memberId          String   @unique
+surname           String
+firstName         String
+middleName        String
+dateOfEntry       DateTime @default(now())
+telephone1        String  @unique
+telephone2        String  @unique
+email             String  @unique
+dateOfBirth       String
+sex               UserSex
+maritalStatus     String
+occupation        String
+business          String
+residentialAddress String
+lga               String
+state             String
+permanentHomeAddress  String
+stateOfOrigin     String
+lga2              String
+amountPaid        String
+nextOfKinName     String
+nextOfKinPhone    String
+nextOfKinPhone2   String
+sponsor           String
+}
+
+model MemberSavings {
+  id                String   @id @default(uuid())
+  member            Member   @relation(fields: [memberId], references: [id])
+  memberId          String
+  cooperative       Cooperative @relation(fields: [cooperativeId], references: [id])
+  cooperativeId     String
+  surname           String
+  firstName         String
+  middleName        String
+  dateOfEntry       DateTime @default(now())
+  telephone         String
+  savingsDeposits   String
+  withdrawals       String
+  savingsBalance    String
+  grandTotal        String
+}
+
+model LoansRequested {
+  id                    String   @id @default(uuid())
+  member                Member   @relation(fields: [memberId], references: [id])
+  memberId              String
+  cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
+  surname               String
+  firstName             String
+  middleName            String
+  membersNo             String
+  amountRequired        String
+  purposeOfLoan         String
+  dateOfApplication     String
+  durationOfLoan        String
+  balanceInTheSavingsAccount  String
+  bvnNumber             String
+  nameOfSurety1         String
+  surety1MembersNo      String
+  surety1telePhone      String
+  surety1balanceInTheSavingsAccount String
+  nameOfSurety2         String
+  surety2MembersNo      String
+  surety2telePhone      String
+  surety2balanceInTheSavingsAccount String
+  amountGuaranteed      String
+  paymentVoucherNO      String
+  amountGranted         String
+  loanInterest          String
+  repaymentsPrincipal   String
+  repaymentsInterest    String
+  balanceOutstandingPrincipal String
+  balanceOutstandingInterest  String
+  balanceOutstandingTotal String
+  approved              Boolean
+  rejected              Boolean
+  pending               Boolean
+  cooperativeId         String
+}
+
+model LoansApproved {
+  id                    String   @id @default(uuid())
+  member                Member   @relation(fields: [memberId], references: [id])
+  memberId              String
+  cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
+ surname               String
+  firstName             String
+  middleName            String
+  membersNo             String
+  amountRequired        String
+  purposeOfLoan         String
+  dateOfApplication     String
+  durationOfLoan        String
+  balanceInTheSavingsAccount  String
+  bvnNumber             String
+  nameOfSurety1         String
+  surety1MembersNo      String
+  surety1telePhone      String
+  surety1balanceInTheSavingsAccount String
+  nameOfSurety2         String
+  surety2MembersNo      String
+  surety2telePhone      String
+  surety2balanceInTheSavingsAccount String
+  amountGuaranteed      String
+  paymentVoucherNO      String
+  amountGranted         String
+  loanInterest          String
+  repaymentsPrincipal   String
+  repaymentsInterest    String
+  balanceOutstandingPrincipal String
+  balanceOutstandingInterest  String
+  balanceOutstandingTotal String
+cooperativeId         String
+}
+
+
+model Debtor {
+  id                    String   @id @default(uuid())
+  member                Member   @relation(fields: [memberId], references: [id])
+  memberId              String
+  cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
+  cooperativeId         String
+  dateLoanReceived      DateTime
+  noOfMonths            Int
+  membersCapital        Float
+  ordinarySavings       Float
+  specialSavings        Float
+  memberLoan            Float
+  interestOnLoan        Float
+}
+
+model MembersFinancialPosition {
+id                String   @id @default(uuid())
+memberId          String   @unique // Add @unique for one-to-one relation
+member            Member   @relation(fields: [memberId], references: [id])
+surname           String
+firstName         String
+middleName        String
+dateOfEntry       DateTime @default(now())
+telephone         String
+membersCapital    String
+ordinarySavings   String
+specialSavings    String
+membersLoan       String
+interestOnMembersLoan String
+BOILoans          String
+grandTotal        String
+intOnLoanAccrued  String
+}
+
+model personalLedgers {
+  id                String   @id @default(uuid())
+  memberId          String   // Foreign key for Member relation
+  member            Member   @relation(fields: [memberId], references: [id])
+surname           String
+firstName         String
+middleName        String
+membersNo         String
+telephone         String
+date              String
+entranceFee       String
+shareCapital      String
+savingsDeposits   String
+withdrawals       String
+savingsBalance    String
+loanRecieved      String
+loanRepayed       String
+loanBalance       String
+goodsAndServices  String
+paymentsMade      String
+balance           String
+interestCharged   String
+interestPaid      String
+interestBalance   String
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String
+  isGlobal    Boolean  // If the role applies globally (super admin, auditor)
+  member      Member?  @relation(fields: [memberId], references: [id])
+  memberId    String?
+  cooperative Cooperative? @relation(fields: [cooperativeId], references: [id])
+  cooperativeId String?
+}
+
+
+// model assetsRequested {
+
+// }
+
+// model assetTransferred {
+
+// }
+
+// model marketPlace {
+
+// }
+
+// model productsListings {
+
+// }
+
+// model productsPurchased {
+
+// }
+
+
+// model entranceFee {
+
+// }
+
+// model loansGranted {
+
+// }
+
+// model shareCapitalContribution {
+
+// }
+
+// model allCooperativeAssets {
+
+// }
+
+
+
+// model allLoans {
+
+// }
+
+// model allAssets {
+
+// }
+
+// model allProducts {
+  
+// }
+
+enum UserSex {
+  MALE
+  FEMALE
+}
+
+enum MaritalStatus {
+  MARRIED
+  SINGLE
+  WIDOWED
+}
+
+enum SourceOFincome {
+  SALARYORBUSINESSINCOME
+  INVESTMENTSORDIVIDENDS
+}
+
+enum IDTYPE {
+  INTERNATIONALPASSPORT
+  NIMC
+  DRIVERSLISENCE
+  VOTERSCARD
+}
