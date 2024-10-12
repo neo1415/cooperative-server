@@ -60,7 +60,10 @@ const accessLogStream = fs.createWriteStream(path.join(__dirname, 'access.log'),
 
 const port = process.env.PORT || 3001;
 
-const allowedOrigins = ['http://localhost:3000']; // Frontend origin
+const allowedOrigins = [
+  'http://localhost:3000',
+'https://cooperative-server.onrender.com'
+]; // Frontend origin
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -196,28 +199,68 @@ const loginLimiter = rateLimit({
 // });
 
 
-const createCustomToken = async (email) => {
-  try {
-    // Attempt to get the user by email
-    const userRecord = await admin.auth().getUserByEmail(email);
-    console.log(`Successfully fetched user: ${userRecord.uid}`);
+// const createCustomToken = async (email) => {
+//   try {
+//     // Attempt to get the user by email
+//     const userRecord = await admin.auth().getUserByEmail(email);
+//     console.log(`Successfully fetched user: ${userRecord.uid}`);
 
-    // Attempt to create a custom token for the user
-    const customToken = await admin.auth().createCustomToken(userRecord.uid);
-    console.log(`Custom token created successfully for user: ${userRecord.uid}`);
+//     // Attempt to create a custom token for the user
+//     const customToken = await admin.auth().createCustomToken(userRecord.uid);
+//     console.log(`Custom token created successfully for user: ${userRecord.uid}`);
     
-    return customToken;
-  } catch (error) {
-    // Log specific error messages to understand the failure
-    if (error.code === 'auth/user-not-found') {
-      console.error(`User not found for email: ${email}`);
-    } else {
-      console.error('Error creating custom token:', error.message);
-    }
+//     return customToken;
+//   } catch (error) {
+//     // Log specific error messages to understand the failure
+//     if (error.code === 'auth/user-not-found') {
+//       console.error(`User not found for email: ${email}`);
+//     } else {
+//       console.error('Error creating custom token:', error.message);
+//     }
 
-    throw new Error('Failed to create custom token');
-  }
-};
+//     throw new Error('Failed to create custom token');
+//   }
+// };
+
+// async function createSuperAdmin() {
+//   const email = 'adneo502@gmail.com';
+//   const password = 'administrator';
+//   const role = 'admin';
+
+//   try {
+//     // Create Firebase user with admin role
+//     const userRecord = await admin.auth().createUser({
+//       email: email,
+//       password: password,
+//       displayName: 'Super Admin',
+//     });
+
+//     // Set custom claims to define the role
+//     await admin.auth().setCustomUserClaims(userRecord.uid, {
+//       role: role,
+//       kycIncomplete: false,  // Super admin doesn't need KYC
+//     });
+
+//     console.log('Super admin account created:', userRecord.uid);
+
+//     return {
+//       message: 'Super admin account created successfully',
+//       uid: userRecord.uid,
+//     };
+//   } catch (error) {
+//     console.error('Error creating super admin account:', error);
+//     throw new Error(`Failed to create super admin: ${error.message}`);
+//   }
+// }
+
+// // Call the function on server startup
+// createSuperAdmin()
+//   .then((result) => {
+//     console.log(result.message);  // Logs success message
+//   })
+//   .catch((error) => {
+//     console.error('Error initializing super admin:', error);
+//   });
 
 // Backend route to verify ID token and create a custom token
 app.post('/verify-token', loginLimiter, async (req, res) => {
@@ -456,6 +499,25 @@ app.get('/cooperatives', async (req, res) => {
   }
 });
 
+app.get('/get-cooperatives', async (req, res) => {
+  try {
+    const cooperatives = await prisma.cooperative.findMany({
+      include: {
+        cooperativeDetails: true,  // Includes the related KYC details (may be null)
+      },
+    });
+    cooperatives.forEach(cooperative => {
+      console.log('Cooperative:', cooperative.cooperativeName);
+      console.log('Details:', cooperative.cooperativeDetails);
+    });
+    res.status(200).json(cooperatives);
+  } catch (error) {
+    console.error('Error fetching cooperatives', error);
+    res.status(500).json({ error: 'Failed to fetch cooperatives' });
+  }
+});
+
+
 app.post('/register-member', async (req, res) => {
   const { email, firstName, surname, cooperativeId, password } = req.body;
 
@@ -504,22 +566,143 @@ app.post('/register-member', async (req, res) => {
   }
 });
 
+app.post('/loan-request', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token); 
+    const memberId = decodedToken.uid; // Firebase UID used as memberId
+
+    const { cooperativeId, loanAmount, loanPurpose, surety1Details, surety2Details } = req.body;
+
+    // Ensure required fields are present
+    if (!cooperativeId || !loanAmount || !loanPurpose || !surety1Details || !surety2Details) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Fetch the member data from Prisma
+    const member = await prisma.member.findUnique({
+      where: { id: memberId },
+      include: {
+        memberDetails: true,  // Includes KYC data
+      }
+    });
+
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    // Create the loan request in Prisma
+    const loansRequested = await prisma.loansRequested.create({
+      data: {
+        cooperative: { connect: { id: cooperativeId } },
+        member: { connect: { id: memberId } },
+        loanAmount,
+        loanPurpose,
+        firstName: member.firstName,
+        surname: member.surname,
+        email: member.email,
+        // Surety details added here
+        nameOfSurety1: surety1Details.name,
+        surety1MembersNo: surety1Details.membersNo,
+        surety1telePhone: surety1Details.telePhone,
+        nameOfSurety2: surety2Details.name,
+        surety2MembersNo: surety2Details.membersNo,
+        surety2telePhone: surety2Details.telePhone,
+      },
+    });
+
+    // Update Firebase custom claims for the member to reflect loan request
+    await admin.auth().setCustomUserClaims(memberId, {
+      onLoanRequest: true,
+    });
+
+    res.status(200).json({
+      message: 'Loan requested successfully',
+      loansRequested,
+    });
+
+  } catch (error) {
+    console.error('Error saving loan request:', error);
+    res.status(500).json({ error: 'Error saving loan request', details: error.message });
+  }
+});
+
+
+app.post('/approve-loan', async (req, res) => {
+  const { loanId, memberId } = req.body;
+
+  try {
+    // Fetch the loan details
+    const loanRequest = await prisma.loansRequested.findUnique({
+      where: { id: loanId },
+    });
+
+    if (!loanRequest) {
+      return res.status(404).json({ error: 'Loan request not found' });
+    }
+
+    // Update Firebase custom claims to mark the loan as approved
+    await admin.auth().setCustomUserClaims(memberId, {
+      onLoanRequest: false,
+      onLoan: true,  // Loan has been approved
+    });
+
+    // Copy loan request to loansApproved model
+    const approvedLoan = await prisma.loansApproved.create({
+      data: {
+        ...loanRequest,  // Copy all the loan request data
+        member: { connect: { id: memberId } },
+        cooperative: { connect: { id: loanRequest.cooperativeId } },
+      },
+    });
+
+    // Optionally, delete the loan request record or keep it for history
+    await prisma.loansRequested.delete({
+      where: { id: loanId },
+    });
+
+    res.status(200).json({
+      message: 'Loan approved successfully',
+      approvedLoan,
+    });
+
+  } catch (error) {
+    console.error('Error approving loan:', error);
+    res.status(500).json({ error: 'Error approving loan', details: error.message });
+  }
+});
+
 app.post('/member-kyc', async (req, res) => {
   const { memberId, ...kycData } = req.body;
 
   try {
-    // Create member details in the Prisma database for KYC completion
+    // Check if the member exists
+    const existingMember = await prisma.member.findUnique({
+      where: { id: memberId },
+    });
+
+    if (!existingMember) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    // Proceed to create member details in the Prisma database for KYC completion
     const memberDetails = await prisma.membersDetails.create({
       data: {
         member: {
-          connect: { id: memberId }
+          connect: { id: memberId },
         },
-        ...kycData // Includes all member KYC data like firstName, surname, phone, etc.
+        ...kycData, // Includes all member KYC data like firstName, surname, phone, etc.
       },
     });
 
     // Optionally update Firebase custom claims to mark KYC completion
     const firebaseUser = await admin.auth().getUser(memberId);
+    const currentClaims = firebaseUser.customClaims || {};
     await admin.auth().setCustomUserClaims(firebaseUser.uid, {
       ...currentClaims,
       kycIncomplete: false, // Update the KYC status
@@ -535,14 +718,30 @@ app.post('/member-kyc', async (req, res) => {
   }
 });
 
+
 app.get('/members', async (req, res) => {
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
+    }
+
+    const token = authHeader.split(' ')[1];  // Extract the token from the Authorization header
+    const decodedToken = await admin.auth().verifyIdToken(token);  // Verify and decode the Firebase ID token
+
+    const cooperativeId = decodedToken.uid;  // Firebase UID is used as the cooperativeId
+    if (!cooperativeId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    // Fetch members associated with this cooperativeId
     const members = await prisma.member.findMany({
+      where: { cooperativeId },  // Filter by cooperativeId
       include: {
-        memberDetails: true,  // Includes the related KYC details (may be null)
+        memberDetails: true,  // Include related KYC details (if they exist)
       },
     });
-    console.log(members);  // Log the members to check if they exist
+
     res.status(200).json(members);
   } catch (error) {
     console.error('Error fetching members:', error);
