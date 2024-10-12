@@ -62,7 +62,8 @@ const port = process.env.PORT || 3001;
 
 const allowedOrigins = [
   'http://localhost:3000',
-'https://cooperative-server.onrender.com'
+'https://cooperative-server.onrender.com',
+"https://icmscooperative.vercel.app"
 ]; // Frontend origin
 
 app.use(cors({
