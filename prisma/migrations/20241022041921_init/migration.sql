@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "LoansRequested" ALTER COLUMN "surname" DROP NOT NULL,
+ALTER COLUMN "firstName" DROP NOT NULL,
+ALTER COLUMN "middleName" DROP NOT NULL,
+ALTER COLUMN "membersNo" DROP NOT NULL;

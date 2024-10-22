@@ -32,6 +32,8 @@ CREATE TABLE "Cooperative" (
 -- CreateTable
 CREATE TABLE "CooperativeDetails" (
     "cooperativeId" TEXT NOT NULL,
+    "cooperativeName" TEXT,
+    "email" TEXT,
     "registrationNumber" TEXT NOT NULL,
     "dateOfIncorporation" TIMESTAMP(3) NOT NULL,
     "address" TEXT NOT NULL,
@@ -75,13 +77,11 @@ CREATE TABLE "MembersDetails" (
     "id" TEXT NOT NULL,
     "cooperativeId" TEXT,
     "memberId" TEXT NOT NULL,
-    "surname" TEXT NOT NULL,
-    "firstName" TEXT NOT NULL,
+    "bvn" TEXT NOT NULL,
     "middleName" TEXT NOT NULL,
     "dateOfEntry" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "telephone1" TEXT NOT NULL,
     "telephone2" TEXT NOT NULL,
-    "email" TEXT NOT NULL,
     "dateOfBirth" TEXT NOT NULL,
     "sex" "UserSex" NOT NULL,
     "maritalStatus" TEXT NOT NULL,
@@ -132,12 +132,12 @@ CREATE TABLE "LoansRequested" (
     "purposeOfLoan" TEXT NOT NULL,
     "dateOfApplication" TEXT NOT NULL,
     "durationOfLoan" TEXT NOT NULL,
-    "balanceInTheSavingsAccount" TEXT NOT NULL,
-    "bvnNumber" TEXT NOT NULL,
+    "balanceInTheSavingsAccount" TEXT,
+    "bvn" TEXT NOT NULL,
     "nameOfSurety1" TEXT NOT NULL,
     "surety1MembersNo" TEXT NOT NULL,
     "surety1telePhone" TEXT NOT NULL,
-    "surety1balanceInTheSavingsAccount" TEXT NOT NULL,
+    "surety1balanceInTheSavingsAccount" TEXT,
     "nameOfSurety2" TEXT NOT NULL,
     "surety2MembersNo" TEXT NOT NULL,
     "surety2telePhone" TEXT NOT NULL,
@@ -151,9 +151,9 @@ CREATE TABLE "LoansRequested" (
     "balanceOutstandingPrincipal" TEXT NOT NULL,
     "balanceOutstandingInterest" TEXT NOT NULL,
     "balanceOutstandingTotal" TEXT NOT NULL,
-    "approved" BOOLEAN NOT NULL,
-    "rejected" BOOLEAN NOT NULL,
-    "pending" BOOLEAN NOT NULL,
+    "approved" BOOLEAN,
+    "rejected" BOOLEAN,
+    "pending" BOOLEAN,
     "cooperativeId" TEXT NOT NULL,
 
     CONSTRAINT "LoansRequested_pkey" PRIMARY KEY ("id")
@@ -290,13 +290,13 @@ CREATE UNIQUE INDEX "Member_email_key" ON "Member"("email");
 CREATE UNIQUE INDEX "MembersDetails_memberId_key" ON "MembersDetails"("memberId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "MembersDetails_bvn_key" ON "MembersDetails"("bvn");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "MembersDetails_telephone1_key" ON "MembersDetails"("telephone1");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "MembersDetails_telephone2_key" ON "MembersDetails"("telephone2");
-
--- CreateIndex
-CREATE UNIQUE INDEX "MembersDetails_email_key" ON "MembersDetails"("email");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "MembersFinancialPosition_memberId_key" ON "MembersFinancialPosition"("memberId");

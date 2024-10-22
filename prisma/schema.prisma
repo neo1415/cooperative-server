@@ -92,13 +92,12 @@ id                String   @id @default(uuid())
  cooperativeId     String?
 member            Member   @relation(fields: [memberId], references: [id]) // One-to-one relation
 memberId          String   @unique
-surname           String
-firstName         String
+bvn               String   @unique
 middleName        String
 dateOfEntry       DateTime @default(now())
 telephone1        String  @unique
 telephone2        String  @unique
-email             String  @unique
+
 dateOfBirth       String
 sex               UserSex
 maritalStatus     String
@@ -139,36 +138,37 @@ model LoansRequested {
   member                Member   @relation(fields: [memberId], references: [id])
   memberId              String
   cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
-  surname               String
-  firstName             String
-  middleName            String
-  membersNo             String
-  amountRequired        String
+  surname               String?
+  firstName             String?
+  middleName            String?
+  membersNo             String?
+  amountRequired        Int
   purposeOfLoan         String
-  dateOfApplication     String
-  durationOfLoan        String
-  balanceInTheSavingsAccount  String
-  bvnNumber             String
+  dateOfApplication     DateTime?
+  durationOfLoan        Int
+  balanceInTheSavingsAccount  String?
+  bvn                   String
   nameOfSurety1         String
   surety1MembersNo      String
   surety1telePhone      String
-  surety1balanceInTheSavingsAccount String
+  surety1balanceInTheSavingsAccount String?
   nameOfSurety2         String
   surety2MembersNo      String
   surety2telePhone      String
-  surety2balanceInTheSavingsAccount String
-  amountGuaranteed      String
-  paymentVoucherNO      String
-  amountGranted         String
-  loanInterest          String
-  repaymentsPrincipal   String
-  repaymentsInterest    String
-  balanceOutstandingPrincipal String
-  balanceOutstandingInterest  String
-  balanceOutstandingTotal String
-  approved              Boolean
-  rejected              Boolean
-  pending               Boolean
+  surety2balanceInTheSavingsAccount String?
+  amountGuaranteed      String?
+  paymentVoucherNO      String?
+  amountGranted         Int?
+  loanInterest          Int?
+  repaymentsPrincipal   Int?
+ expectedReimbursementDate        DateTime
+  repaymentsInterest    Int?
+  balanceOutstandingPrincipal Int?
+  balanceOutstandingInterest  Int?
+  balanceOutstandingTotal Int?
+  approved              Boolean?
+  rejected              Boolean?
+  pending               Boolean?
   cooperativeId         String
 }
 
