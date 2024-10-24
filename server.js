@@ -228,7 +228,7 @@ const loginLimiter = rateLimit({
 // };
 
 // async function createSuperAdmin() {
-//   const email = 'adneo502@gmail.com';
+//   const email = 'admin@admin.com';
 //   const password = 'administrator';
 //   const role = 'admin';
 
@@ -239,6 +239,7 @@ const loginLimiter = rateLimit({
 //       password: password,
 //       displayName: 'Super Admin',
 //     });
+
 
 //     // Set custom claims to define the role
 //     await admin.auth().setCustomUserClaims(userRecord.uid, {
@@ -258,7 +259,7 @@ const loginLimiter = rateLimit({
 //   }
 // }
 
-// // Call the function on server startup
+// // // Call the function on server startup
 // createSuperAdmin()
 //   .then((result) => {
 //     console.log(result.message);  // Logs success message
@@ -775,47 +776,117 @@ app.post('/loan-requests/:loanId/approve-reject', async (req, res) => {
 });
 
 
-app.post('/approve-loan', async (req, res) => {
-  const { loanId, memberId } = req.body;
+// app.post('/approve-loan', async (req, res) => {
+//   const { loanId, memberId } = req.body;
+
+//   try {
+//     // Fetch the loan details
+//     const loanRequest = await prisma.loansRequested.findUnique({
+//       where: { id: loanId },
+//     });
+
+//     if (!loanRequest) {
+//       return res.status(404).json({ error: 'Loan request not found' });
+//     }
+
+//     // Update Firebase custom claims to mark the loan as approved
+//     await admin.auth().setCustomUserClaims(memberId, {
+//       onLoanRequest: false,
+//       onLoan: true,  // Loan has been approved
+//     });
+
+//     // Copy loan request to loansApproved model
+//     const approvedLoan = await prisma.loansApproved.create({
+//       data: {
+//         ...loanRequest,  // Copy all the loan request data
+//         member: { connect: { id: memberId } },
+//         cooperative: { connect: { id: loanRequest.cooperativeId } },
+//       },
+//     });
+
+//     // Optionally, delete the loan request record or keep it for history
+//     await prisma.loansRequested.delete({
+//       where: { id: loanId },
+//     });
+
+//     res.status(200).json({
+//       message: 'Loan approved successfully',
+//       approvedLoan,
+//     });
+
+//   } catch (error) {
+//     console.error('Error approving loan:', error);
+//     res.status(500).json({ error: 'Error approving loan', details: error.message });
+//   }
+// });
+
+
+app.post('/loan-request/status', async (req, res) => {
+  const { loanId, newStatus } = req.body;
 
   try {
-    // Fetch the loan details
-    const loanRequest = await prisma.loansRequested.findUnique({
+    // Fetch the loan request
+    const loan = await prisma.loansRequested.update({
       where: { id: loanId },
-    });
-
-    if (!loanRequest) {
-      return res.status(404).json({ error: 'Loan request not found' });
-    }
-
-    // Update Firebase custom claims to mark the loan as approved
-    await admin.auth().setCustomUserClaims(memberId, {
-      onLoanRequest: false,
-      onLoan: true,  // Loan has been approved
-    });
-
-    // Copy loan request to loansApproved model
-    const approvedLoan = await prisma.loansApproved.create({
       data: {
-        ...loanRequest,  // Copy all the loan request data
-        member: { connect: { id: memberId } },
-        cooperative: { connect: { id: loanRequest.cooperativeId } },
+        pending: newStatus === 'pending',
+        approved: newStatus === 'approved',
+        rejected: newStatus === 'rejected',
       },
     });
 
-    // Optionally, delete the loan request record or keep it for history
-    await prisma.loansRequested.delete({
-      where: { id: loanId },
-    });
+    // If the loan is approved, move it to LoansApproved and set custom claims
+    if (newStatus === 'approved') {
+      // Move loan data to LoansApproved with a new unique ID
+      await prisma.loansApproved.create({
+        data: {
+          // Generate a new unique ID for the LoansApproved entry
+          id: undefined,  // Let Prisma auto-generate the new unique ID
+          memberId: loan.memberId,
+          cooperativeId: loan.cooperativeId,
+          amountRequired: loan.amountRequired,
+          purposeOfLoan: loan.purposeOfLoan,
+          durationOfLoan: loan.durationOfLoan,
+          bvn: loan.bvn,
+          nameOfSurety1: loan.nameOfSurety1,
+          surety1MembersNo: loan.surety1MembersNo,
+          surety1telePhone: loan.surety1telePhone,
+          nameOfSurety2: loan.nameOfSurety2,
+          surety2MembersNo: loan.surety2MembersNo,
+          surety2telePhone: loan.surety2telePhone,
+          amountGranted: loan.amountGranted,
+          loanInterest: loan.loanInterest,
+          expectedReimbursementDate: loan.expectedReimbursementDate,
+          balanceInTheSavingsAccount: loan.balanceInTheSavingsAccount,
+          surety1balanceInTheSavingsAccount: loan.surety1balanceInTheSavingsAccount,
+          surety2balanceInTheSavingsAccount: loan.surety2balanceInTheSavingsAccount,
+          amountGuaranteed: loan.amountGuaranteed,
+          paymentVoucherNO: loan.paymentVoucherNO,
+          repaymentsPrincipal: loan.repaymentsPrincipal,
+          repaymentsInterest: loan.repaymentsInterest,
+          balanceOutstandingPrincipal: loan.balanceOutstandingPrincipal,
+          balanceOutstandingInterest: loan.balanceOutstandingInterest,
+          balanceOutstandingTotal: loan.balanceOutstandingTotal,
+          dateOfApplication: loan.dateOfApplication,
+        },
+      });
 
-    res.status(200).json({
-      message: 'Loan approved successfully',
-      approvedLoan,
-    });
+      // Set custom claims for the user (member)
+      const user = await admin.auth().getUser(loan.memberId);
+      const currentClaims = user.customClaims || {}; // Get current claims
 
+      // Set the custom claim to indicate the loan is approved
+      await admin.auth().setCustomUserClaims(loan.memberId, {
+        ...currentClaims,  // Retain existing claims
+        loanApproved: true,  // Add custom claim for approved loan
+      });
+    }
+
+    // Respond with success
+    res.status(200).json({ message: 'Loan status updated successfully', loan });
   } catch (error) {
-    console.error('Error approving loan:', error);
-    res.status(500).json({ error: 'Error approving loan', details: error.message });
+    console.error('Error updating loan status:', error.message);
+    res.status(500).json({ error: 'Failed to update loan status', details: error.message });
   }
 });
 

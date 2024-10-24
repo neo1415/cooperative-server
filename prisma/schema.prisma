@@ -173,38 +173,39 @@ model LoansRequested {
 }
 
 model LoansApproved {
-  id                    String   @id @default(uuid())
+   id                    String   @id @default(uuid())
   member                Member   @relation(fields: [memberId], references: [id])
   memberId              String
   cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
- surname               String
-  firstName             String
-  middleName            String
-  membersNo             String
-  amountRequired        String
+  surname               String?
+  firstName             String?
+  middleName            String?
+  membersNo             String?
+  amountRequired        Int
   purposeOfLoan         String
-  dateOfApplication     String
-  durationOfLoan        String
-  balanceInTheSavingsAccount  String
-  bvnNumber             String
+  dateOfApplication     DateTime?
+  durationOfLoan        Int
+  balanceInTheSavingsAccount  String?
+  bvn                   String
   nameOfSurety1         String
   surety1MembersNo      String
   surety1telePhone      String
-  surety1balanceInTheSavingsAccount String
+  surety1balanceInTheSavingsAccount String?
   nameOfSurety2         String
   surety2MembersNo      String
   surety2telePhone      String
-  surety2balanceInTheSavingsAccount String
-  amountGuaranteed      String
-  paymentVoucherNO      String
-  amountGranted         String
-  loanInterest          String
-  repaymentsPrincipal   String
-  repaymentsInterest    String
-  balanceOutstandingPrincipal String
-  balanceOutstandingInterest  String
-  balanceOutstandingTotal String
-cooperativeId         String
+  surety2balanceInTheSavingsAccount String?
+  amountGuaranteed      String?
+  paymentVoucherNO      String?
+  amountGranted         Int?
+  loanInterest          Int?
+  repaymentsPrincipal   Int?
+ expectedReimbursementDate        DateTime
+  repaymentsInterest    Int?
+  balanceOutstandingPrincipal Int?
+  balanceOutstandingInterest  Int?
+  balanceOutstandingTotal Int?
+  cooperativeId         String
 }
 
 
