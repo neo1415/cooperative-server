@@ -524,6 +524,70 @@ app.get('/get-cooperatives', async (req, res) => {
 });
 
 
+// Cooperative profile route
+app.get('/cooperative/profileSettings', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const cooperativeId = decodedToken.uid;
+
+    // Fetch cooperative and all related data
+    const cooperative = await prisma.cooperative.findUnique({
+      where: { id: cooperativeId },
+      include: {
+        cooperativeDetails: true,
+        members: {
+          include: {
+            memberSavings: true,
+            loansRequested: true,
+            loansApproved: true,
+          },
+        },
+      },
+    });
+
+    if (!cooperative) {
+      return res.status(404).json({ error: 'Cooperative not found' });
+    }
+
+    // Calculate totals for display
+    const totals = cooperative.members.reduce(
+      (acc, member) => {
+        acc.totalSavings += member.memberSavings.reduce((sum, s) => sum + s.amount, 0);
+        acc.totalLoansRequested += member.loansRequested.reduce((sum, lr) => sum + lr.amount, 0);
+        acc.totalLoansApproved += member.loansApproved.reduce((sum, la) => sum + la.amount, 0);
+        acc.totalSavingsCount += member.memberSavings.length;
+        acc.totalLoansRequestedCount += member.loansRequested.length;
+        acc.totalLoansApprovedCount += member.loansApproved.length;
+        return acc;
+      },
+      {
+        totalSavings: 0,
+        totalLoansRequested: 0,
+        totalLoansApproved: 0,
+        totalSavingsCount: 0,
+        totalLoansRequestedCount: 0,
+        totalLoansApprovedCount: 0,
+      }
+    );
+
+    totals.totalMembers = cooperative.members.length;
+
+    // Return the cooperative data and totals
+    res.status(200).json({ ...cooperative, totals });
+  } catch (error) {
+    console.error('Error fetching cooperative profile:', error);
+    res.status(500).json({ error: 'Failed to fetch cooperative profile', details: error.message });
+  }
+});
+
+
+
 app.post('/register-member', async (req, res) => {
   const { email, firstName, surname, cooperativeId, password } = req.body;
 
@@ -696,25 +760,37 @@ app.post('/loan-request', async (req, res) => {
 app.get('/loan-requests', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
-    const memberId = await getMemberIdFromAuth(authHeader); // Validate authorization and get memberId
-    
+    const memberId = await getMemberIdFromAuth(authHeader); // Get Firebase UID as memberId
+
+    // Get the role from the user's custom claims
+    const user = await admin.auth().getUser(memberId);
+    const role = user.customClaims?.role;
+
     const { cooperativeId } = req.query; // cooperativeId is optional
 
-    // Build the query filter dynamically based on the presence of cooperativeId
-    const filter = cooperativeId
-      ? { cooperativeId: cooperativeId } // Fetch by cooperativeId (for cooperative-admins)
-      : { memberId: memberId };          // Fetch by memberId (for members)
+    let filter = {};
 
-    // Fetch the loan requests with the appropriate filter
+    if (role === 'cooperative-admin' && cooperativeId) {
+      // Cooperative admin: Fetch all loan requests for the cooperative
+      filter = { cooperativeId };
+    } else if (role === 'member') {
+      // Member: Only fetch loan requests made by the member
+      filter = { memberId };
+    } else {
+      return res.status(403).json({ error: 'Unauthorized to view loan requests' });
+    }
+
+    // Fetch loan requests based on the filter
     const loanRequests = await prisma.loansRequested.findMany({
       where: filter,
       include: {
         member: {
           include: {
-            memberDetails: true,  // Include member details (e.g., surname, firstName, etc.)
+            memberDetails: true, // Include member details (e.g., surname, firstName, etc.)
+            memberSavings:true
           },
         },
-        cooperative: true,         // Include cooperative details
+        cooperative: true, // Include cooperative details
       },
     });
 
@@ -728,6 +804,7 @@ app.get('/loan-requests', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch loan requests', details: error.message });
   }
 });
+
 
 
 
@@ -776,50 +853,33 @@ app.post('/loan-requests/:loanId/approve-reject', async (req, res) => {
 });
 
 
-// app.post('/approve-loan', async (req, res) => {
-//   const { loanId, memberId } = req.body;
+app.get('/member/profile', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
+    }
 
-//   try {
-//     // Fetch the loan details
-//     const loanRequest = await prisma.loansRequested.findUnique({
-//       where: { id: loanId },
-//     });
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const memberId = decodedToken.uid;
 
-//     if (!loanRequest) {
-//       return res.status(404).json({ error: 'Loan request not found' });
-//     }
+    // Find the logged-in member based on Firebase UID
+    const member = await prisma.member.findUnique({
+      where: { id: memberId },
+      include: { memberDetails: true }, // Includes memberDetails
+    });
 
-//     // Update Firebase custom claims to mark the loan as approved
-//     await admin.auth().setCustomUserClaims(memberId, {
-//       onLoanRequest: false,
-//       onLoan: true,  // Loan has been approved
-//     });
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
 
-//     // Copy loan request to loansApproved model
-//     const approvedLoan = await prisma.loansApproved.create({
-//       data: {
-//         ...loanRequest,  // Copy all the loan request data
-//         member: { connect: { id: memberId } },
-//         cooperative: { connect: { id: loanRequest.cooperativeId } },
-//       },
-//     });
-
-//     // Optionally, delete the loan request record or keep it for history
-//     await prisma.loansRequested.delete({
-//       where: { id: loanId },
-//     });
-
-//     res.status(200).json({
-//       message: 'Loan approved successfully',
-//       approvedLoan,
-//     });
-
-//   } catch (error) {
-//     console.error('Error approving loan:', error);
-//     res.status(500).json({ error: 'Error approving loan', details: error.message });
-//   }
-// });
-
+    res.status(200).json(member);
+  } catch (error) {
+    console.error('Error fetching member profile:', error);
+    res.status(500).json({ error: 'Failed to fetch member profile', details: error.message });
+  }
+});
 
 app.post('/loan-request/status', async (req, res) => {
   const { loanId, newStatus } = req.body;
@@ -890,6 +950,107 @@ app.post('/loan-request/status', async (req, res) => {
   }
 });
 
+app.post('/loan-interest-settings', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error("Authorization header is missing or incorrect");
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+
+    // Get the cooperativeId from uid
+    const cooperativeId = decodedToken.uid;
+
+    const { settings } = req.body;
+
+    if (!cooperativeId) {
+      console.error("Missing cooperative ID in decoded token");
+      return res.status(400).json({ error: 'Missing cooperative ID' });
+    }
+
+    const savedSettings = await Promise.all(
+      settings.map(async (setting) => {
+        return await prisma.loanInterestSetting.create({
+          data: {
+            cooperativeId,
+            minDurationMonths: setting.minDuration,
+            maxDurationMonths: setting.maxDuration,
+            durationInterestRate: setting.durationRate,
+            minAmount: setting.minAmount,
+            maxAmount: setting.maxAmount,
+            amountInterestRate: setting.amountRate,
+          },
+        });
+      })
+    );
+    
+
+    res.status(201).json(savedSettings);
+  } catch (error) {
+    console.error("Error saving loan interest settings:", error);
+    res.status(500).json({ error: error.message || 'Failed to save loan interest settings' });
+  }
+});
+
+app.put('/update-loan-interest-settings/:id', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const cooperativeId = decodedToken.uid;
+    const { id } = req.params;
+    const { minDurationMonths, maxDurationMonths, durationInterestRate, minAmount, maxAmount, amountInterestRate } = req.body;
+
+    const updatedSetting = await prisma.loanInterestSetting.update({
+      where: { id: Number(id), cooperativeId },
+      data: {
+        minDurationMonths,
+        maxDurationMonths,
+        durationInterestRate,
+        minAmount,
+        maxAmount,
+        amountInterestRate,
+      },
+    });
+
+    res.status(200).json(updatedSetting);
+  } catch (error) {
+    console.error("Error updating loan interest setting:", error);
+    res.status(500).json({ error: 'Failed to update loan interest setting' });
+  }
+});
+
+app.get('/fetch-loan-interest-settings', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const cooperativeId = decodedToken.uid;
+
+    const settings = await prisma.loanInterestSetting.findMany({
+      where: { cooperativeId },
+    });
+
+    res.status(200).json(settings);
+  } catch (error) {
+    console.error("Error fetching loan interest settings:", error);
+    res.status(500).json({ error: 'Failed to fetch loan interest settings' });
+  }
+});
+
+
 // KYC submission route: /member-kyc
 app.post('/member-kyc', async (req, res) => {
   const { memberId, ...memberKycData } = req.body;
@@ -932,7 +1093,8 @@ app.post('/member-kyc', async (req, res) => {
   }
 });
 
-app.get('/members', async (req, res) => {
+// Route to get specific member profile data
+app.get('/member/profileSettings', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -941,86 +1103,31 @@ app.get('/members', async (req, res) => {
 
     const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
+    const memberId = decodedToken.uid;
 
-    const cooperativeId = decodedToken.uid;  // Assuming Firebase UID is used as cooperativeId
-    if (!cooperativeId) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
+    // Find the logged-in member based on Firebase UID
+    const member = await prisma.member.findUnique({
+      where: { id: memberId },
+      include: { 
+        memberDetails: true,
+        loansRequested:true,
+        loansApproved:true,
+        memberSavings:true,
 
-    // Fetch members associated with this cooperativeId and include their details
-    const members = await prisma.member.findMany({
-      where: { cooperativeId },
-      include: {
-        memberDetails: true,  // Includes the memberDetails model
-      },
+       }, // Includes memberDetails
     });
 
-    res.status(200).json(members);
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    res.status(200).json(member);
   } catch (error) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: 'Failed to fetch members' });
+    console.error('Error fetching member profile:', error);
+    res.status(500).json({ error: 'Failed to fetch member profile', details: error.message });
   }
 });
 
-app.get('/members', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-
-    const cooperativeId = decodedToken.uid;  // Assuming Firebase UID is used as cooperativeId
-    if (!cooperativeId) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-
-    // Fetch members associated with this cooperativeId and include their details
-    const members = await prisma.member.findMany({
-      where: { cooperativeId },
-      include: {
-        memberDetails: true,  // Includes the memberDetails model
-      },
-    });
-
-    res.status(200).json(members);
-  } catch (error) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: 'Failed to fetch members' });
-  }
-});
-
-app.get('/members', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-
-    const cooperativeId = decodedToken.uid;  // Assuming Firebase UID is used as cooperativeId
-    if (!cooperativeId) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-
-    // Fetch members associated with this cooperativeId and include their details
-    const members = await prisma.member.findMany({
-      where: { cooperativeId },
-      include: {
-        memberDetails: true,  // Includes the memberDetails model
-      },
-    });
-
-    res.status(200).json(members);
-  } catch (error) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: 'Failed to fetch members' });
-  }
-});
 
 app.get('/members', async (req, res) => {
   try {
@@ -1052,7 +1159,62 @@ app.get('/members', async (req, res) => {
   }
 });
 
-app.get('/members', async (req, res) => {
+
+// app.post('/member/savings') - Route for handling savings deposits
+app.post('/member/savings', async (req, res) => {
+  try {
+    const { amount } = req.body;
+
+    // Validate amount
+    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid deposit amount' });
+    }
+
+    const authHeader = req.headers.authorization;
+    const memberId = await getMemberIdFromAuth(authHeader);
+
+    const member = await findMemberById(memberId);
+
+    const lastSavingsRecord = await prisma.memberSavings.findFirst({
+      where: { memberId },
+      orderBy: { dateOfEntry: 'desc' },
+    });
+
+    // Calculate new balance, withdrawals, and grand total
+    const previousBalance = lastSavingsRecord?.savingsBalance || 0;
+    const newBalance = previousBalance + amount;
+    const totalWithdrawals = lastSavingsRecord?.totalWithdrawals || 0;
+    const grandTotal = newBalance - totalWithdrawals;
+
+    // Increment the savings frequency for each new deposit
+    const savingsFrequency = (lastSavingsRecord?.savingsFrequency || 0) + 1;
+
+    // Create a new savings deposit record
+    const savingsDeposit = await prisma.memberSavings.create({
+      data: {
+        memberId,
+        cooperativeId: member.cooperativeId,
+        savingsDeposits: amount,
+        withdrawals: 0,
+        savingsBalance: newBalance,
+        totalWithdrawals,
+        grandTotal,
+        savingsFrequency, // Track deposit frequency
+      },
+    });
+
+    res.status(200).json(savingsDeposit);
+    console.log(savingsDeposit);
+    console.log(savingsDeposit.data);
+    console.log("success")
+  } catch (error) {
+    console.error('Error processing savings deposit:', error);
+    res.status(500).json({ error: 'Failed to process savings deposit' });
+  }
+});
+
+// Updated Route to Fetch Transactions for Member or Cooperative
+app.get('/transactions', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1061,28 +1223,70 @@ app.get('/members', async (req, res) => {
 
     const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
+    const memberId = decodedToken.uid;
 
-    const cooperativeId = decodedToken.uid;  // Assuming Firebase UID is used as cooperativeId
-    if (!cooperativeId) {
-      return res.status(403).json({ error: 'Not authorized' });
+    const user = await admin.auth().getUser(memberId);
+    const role = user.customClaims?.role;
+
+    const cooperativeId = req.query.cooperativeId;
+    let transactions;
+
+    if (role === 'cooperative-admin' && cooperativeId) {
+      transactions = await prisma.memberSavings.findMany({
+        where: { cooperativeId },
+        include: {
+          member: {
+            select: {
+              firstName: true,
+              surname: true,
+              email: true,
+              memberDetails: { select: { telephone1: true } },
+            },
+          },
+        },
+        orderBy: { dateOfEntry: 'desc' },
+      });
+    } else if (role === 'member') {
+      transactions = await prisma.memberSavings.findMany({
+        where: { memberId },
+        include: {
+          member: {
+            select: {
+              firstName: true,
+              surname: true,
+              email: true,
+              memberDetails: { select: { telephone1: true } },
+            },
+          },
+        },
+        orderBy: { dateOfEntry: 'desc' },
+      });
+    } else {
+      return res.status(403).json({ error: 'Unauthorized to view transactions' });
     }
 
-    // Fetch members associated with this cooperativeId and include their details
-    const members = await prisma.member.findMany({
-      where: { cooperativeId },
-      include: {
-        memberDetails: true,  // Includes the memberDetails model
-      },
-    });
+    console.log('Transactions returned:', transactions); // Log the transactions array
+    if (transactions.length === 0) {
+      console.log('No transactions found for the provided ID.');
+    }
 
-    res.status(200).json(members);
+    const flattenedTransactions = transactions.map((transaction) => ({
+      ...transaction,
+      firstName: transaction.member?.firstName,
+      surname: transaction.member?.surname,
+      email: transaction.member?.email,
+      telephone: transaction.member?.memberDetails?.telephone1,
+    }));
+
+    res.status(200).json(flattenedTransactions);
   } catch (error) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: 'Failed to fetch members' });
+    console.error('Error fetching transactions:', error);
+    res.status(500).json({ error: 'Failed to fetch transactions' });
   }
 });
 
-app.get('/members', async (req, res) => {
+
+app.get('/single-transaction', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1091,57 +1295,105 @@ app.get('/members', async (req, res) => {
 
     const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
+    
+    const cooperativeId = decodedToken.cooperativeId;
+    const memberId = decodedToken.uid;
+    // const transactionId = req.query.transactionId; // Optional query param for specific transaction
 
-    const cooperativeId = decodedToken.uid;  // Assuming Firebase UID is used as cooperativeId
-    if (!cooperativeId) {
+    let transaction;
+
+    if (cooperativeId && decodedToken.role === 'cooperative-admin') {
+      transaction = await prisma.memberSavings.findFirst({
+        where: { cooperativeId,
+          //  id: transactionId || undefined 
+          },
+        include: {
+          member: {
+            select: {
+              firstName: true,
+              surname: true,
+              email: true,
+              memberDetails: { select: { telephone1: true } },
+            },
+          },
+        },
+        orderBy: { dateOfEntry: 'desc' },
+      });
+    } else if (memberId) {
+      transaction = await prisma.memberSavings.findFirst({
+        where: { memberId,
+          //  id: transactionId || undefined 
+          },
+        include: {
+          member: {
+            select: {
+              firstName: true,
+              surname: true,
+              email: true,
+              memberDetails: { select: { telephone1: true } },
+            },
+          },
+        },
+        orderBy: { dateOfEntry: 'desc' },
+      });
+    } else {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // Fetch members associated with this cooperativeId and include their details
-    const members = await prisma.member.findMany({
-      where: { cooperativeId },
-      include: {
-        memberDetails: true,  // Includes the memberDetails model
-      },
-    });
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
 
-    res.status(200).json(members);
+    const flattenedTransaction = {
+      ...transaction,
+      firstName: transaction.member?.firstName,
+      surname: transaction.member?.surname,
+      email: transaction.member?.email,
+      telephone: transaction.member?.memberDetails?.telephone1,
+    };
+
+    res.status(200).json(flattenedTransaction);
   } catch (error) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: 'Failed to fetch members' });
+    console.error('Error fetching transaction:', error);
+    res.status(500).json({ error: 'Failed to fetch transaction' });
   }
 });
 
-app.get('/members', async (req, res) => {
+// app.post('/member/withdraw') - Route for handling withdrawals
+app.post('/member/withdraw', async (req, res) => {
   try {
+    const { amount } = req.body;
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
-    }
+    const memberId = await getMemberIdFromAuth(authHeader);
 
-    const token = authHeader.split(' ')[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
+    const lastSavingsRecord = await prisma.memberSavings.findFirst({
+      where: { memberId },
+      orderBy: { dateOfEntry: 'desc' },
+    });
 
-    const cooperativeId = decodedToken.uid;  // Assuming Firebase UID is used as cooperativeId
-    if (!cooperativeId) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
+    const newBalance = (lastSavingsRecord?.savingsBalance || 0) - amount;
+    const newTotalWithdrawals = (lastSavingsRecord?.totalWithdrawals || 0) + amount;
 
-    // Fetch members associated with this cooperativeId and include their details
-    const members = await prisma.member.findMany({
-      where: { cooperativeId },
-      include: {
-        memberDetails: true,  // Includes the memberDetails model
+    const withdrawal = await prisma.memberSavings.create({
+      data: {
+        memberId,
+        cooperativeId: lastSavingsRecord?.cooperativeId,
+        savingsDeposits: 0,
+        withdrawals: amount,
+        savingsBalance: newBalance,
+        totalWithdrawals: newTotalWithdrawals,
+        grandTotal: newBalance,
       },
     });
 
-    res.status(200).json(members);
+    // Initiate bank transfer using Flutterwave (this requires additional integration)
+    const transferResponse = await flutterwaveTransferToBank(amount, memberId);
+    res.status(200).json(withdrawal);
   } catch (error) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: 'Failed to fetch members' });
+    console.error('Error processing withdrawal:', error);
+    res.status(500).json({ error: 'Failed to process withdrawal' });
   }
 });
-
 
 
 //Update user role or role assignment

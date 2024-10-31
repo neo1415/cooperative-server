@@ -1,10 +1,10 @@
-# Use the official Node.js image
-FROM node:14
+# Use the latest LTS version of Node.js
+FROM node:18
 
 # Set the working directory
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json
+# Copy package.json and package-lock.json to install dependencies
 COPY package*.json ./
 
 # Install dependencies

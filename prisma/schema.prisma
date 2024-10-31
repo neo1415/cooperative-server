@@ -30,7 +30,8 @@ model Cooperative {
   savings               MemberSavings[] // One-to-many relation to MemberSavings
   loansRequested        LoansRequested[] // One-to-many relation to LoansRequested
   loansApproved         LoansApproved[] // One-to-many relation to LoansApproved
-  debtors               Debtor[]         // One-to-many relation to Debtor
+  debtors               Debtor[] 
+  loanInterestSetting   LoanInterestSetting[]     // One-to-many relation to Debtor
   roles                 Role[]         // One-to-many relation to Role
 
   createdAt             DateTime @default(now())
@@ -41,6 +42,7 @@ model CooperativeDetails{
      cooperativeName       String?  
        email                 String?   
   registrationNumber    String   @unique
+  // img                   String? 
   dateOfIncorporation   DateTime
   cooperative            Cooperative?  @relation(fields: [cooperativeId], references: [id])
   address               String
@@ -71,18 +73,17 @@ model CooperativeDetails{
 
 model Member {
   id                String   @id @default(uuid())
-  // img               String // <-- This field is required
   surname           String
   cooperativeId     String?
   firstName         String
   email             String   @unique
-  savings           MemberSavings[] // Relation to MemberSavings
   cooperative       Cooperative? @relation(fields: [cooperativeId], references: [id])
   memberDetails     MembersDetails?  // One-to-one relation with MemberDetails (KYC)
   roles             Role[]          // One-to-many relation with Role
   debtors           Debtor[]        // One-to-many relation with Debtor
   loansRequested    LoansRequested[] // One-to-many relation to LoansRequested
   loansApproved     LoansApproved[]  // One-to-many relation to LoansApproved
+  memberSavings     MemberSavings[] // Relation to MemberSavings
   membersFinancialPosition MembersFinancialPosition? // Financial position linked to the member
   personalLedgers   personalLedgers[] // Access to personal ledger
 }
@@ -114,6 +115,7 @@ nextOfKinName     String
 nextOfKinPhone    String
 nextOfKinPhone2   String
 sponsor           String
+  // img               String // <-- This field is required
 }
 
 model MemberSavings {
@@ -122,16 +124,32 @@ model MemberSavings {
   memberId          String
   cooperative       Cooperative @relation(fields: [cooperativeId], references: [id])
   cooperativeId     String
-  surname           String
-  firstName         String
-  middleName        String
+  surname           String?
+  firstName         String?
+  middleName        String?
   dateOfEntry       DateTime @default(now())
-  telephone         String
-  savingsDeposits   String
-  withdrawals       String
-  savingsBalance    String
-  grandTotal        String
+  telephone         String?
+  savingsDeposits   Int
+  withdrawals       Int
+  savingsBalance    Int
+  totalWithdrawals   Int
+  grandTotal        Int
+  savingsFrequency   Int      @default(0) // New field to track deposit frequency
 }
+
+model LoanInterestSetting {
+  id               String   @id @default(uuid())
+  cooperative      Cooperative @relation(fields: [cooperativeId], references: [id])
+  cooperativeId    String
+  minDurationMonths Int
+  maxDurationMonths Int
+  durationInterestRate Float
+  minAmount        Int
+  maxAmount        Int
+  amountInterestRate Float
+  createdAt        DateTime @default(now())
+}
+
 
 model LoansRequested {
   id                    String   @id @default(uuid())
