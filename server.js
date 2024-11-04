@@ -268,6 +268,72 @@ const loginLimiter = rateLimit({
 //     console.error('Error initializing super admin:', error);
 //   });
 
+// Middleware to verify Firebase token and fetch cooperativeId if missing
+async function verifyFirebaseToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: No token provided' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    // Verify the token
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    console.log("Decoded token:", decodedToken); // Log the entire token to verify contents
+
+    // Initialize the user object with existing claims
+    req.user = {
+      uid: decodedToken.uid,
+      role: decodedToken.role || null,
+      cooperativeId: decodedToken.cooperativeId || null,
+      memberId: decodedToken.memberId || null,
+    };
+
+    // Fetch cooperativeId from database if it's missing for a cooperative admin
+    if (req.user.role === 'cooperative-admin' && !req.user.cooperativeId) {
+      const cooperative = await prisma.cooperative.findUnique({
+        where: { id: req.user.uid },
+        select: { id: true },
+      });
+
+      if (cooperative) {
+        req.user.cooperativeId = cooperative.id;
+      } else {
+        console.log("403 Forbidden: Cooperative admin not found in database");
+        return res.status(403).json({ error: 'Unauthorized: Cooperative admin not found' });
+      }
+    }
+
+      // Fetch cooperativeId from database if it's missing for a cooperative admin
+      if (req.user.role === 'member' && !req.user.memberId) {
+        const member = await prisma.member.findUnique({
+          where: { id: req.user.uid },
+          select: { id: true },
+        });
+  
+        if (member) {
+          req.user.memberId = member.id;
+        } else {
+          console.log("403 Forbidden: Member admin not found in database");
+          return res.status(403).json({ error: 'Unauthorized: Cooperative admin not found' });
+        }
+      }
+
+    // Ensure the role is present, or reject the request
+    if (!req.user.role) {
+      console.log("403 Forbidden: Missing role claim");
+      return res.status(403).json({ error: 'Unauthorized: Missing role claim' });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Error verifying Firebase token:', error);
+    res.status(401).json({ error: 'Unauthorized: Invalid token' });
+  }
+}
+
+
 // Backend route to verify ID token and create a custom token
 app.post('/verify-token', loginLimiter, async (req, res) => {
   const { idToken } = req.body;
@@ -293,6 +359,7 @@ app.post('/verify-token', loginLimiter, async (req, res) => {
     res.status(500).send({ error: 'Authentication failed' });
   }
 });
+
 
 // Password reset route
 app.post('/resetpassword', loginLimiter, [
@@ -399,7 +466,7 @@ app.post('/login', async (req, res) => {
 // User registration route
 
 // Route for user registration
-app.post('/register', async (req, res) => {
+app.post('/register',verifyFirebaseToken, async (req, res) => {
   const { email, cooperativeName, password } = req.body;
 
   try {
@@ -459,7 +526,7 @@ app.post('/register', async (req, res) => {
 
 
 // KYC submission route: /cooperative-kyc
-app.post('/cooperative-kyc', async (req, res) => {
+app.post('/cooperative-kyc',verifyFirebaseToken, async (req, res) => {
   const { cooperativeId, ...memberKycData } = req.body;
 
   try {
@@ -493,7 +560,7 @@ app.post('/cooperative-kyc', async (req, res) => {
   }
 });
 
-app.get('/cooperatives', async (req, res) => {
+app.get('/cooperatives',verifyFirebaseToken, async (req, res) => {
   try {
     const cooperatives = await prisma.cooperative.findMany({
       select: { id: true, cooperativeName: true },
@@ -505,7 +572,7 @@ app.get('/cooperatives', async (req, res) => {
   }
 });
 
-app.get('/get-cooperatives', async (req, res) => {
+app.get('/get-cooperatives',verifyFirebaseToken, async (req, res) => {
   try {
     const cooperatives = await prisma.cooperative.findMany({
       include: {
@@ -525,7 +592,7 @@ app.get('/get-cooperatives', async (req, res) => {
 
 
 // Cooperative profile route
-app.get('/cooperative/profileSettings', async (req, res) => {
+app.get('/cooperative/profileSettings',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -588,7 +655,7 @@ app.get('/cooperative/profileSettings', async (req, res) => {
 
 
 
-app.post('/register-member', async (req, res) => {
+app.post('/register-member',verifyFirebaseToken, async (req, res) => {
   const { email, firstName, surname, cooperativeId, password } = req.body;
 
   try {
@@ -637,7 +704,7 @@ app.post('/register-member', async (req, res) => {
   }
 });
 
-app.get('/get-member-cooperative/:memberId', async (req, res) => {
+app.get('/get-member-cooperative/:memberId',verifyFirebaseToken, async (req, res) => {
   try {
     const { memberId } = req.params;
 
@@ -701,8 +768,9 @@ async function findCooperativeById(cooperativeId) {
 }
 
 // Main route handler for loan request creation
-app.post('/loan-request', async (req, res) => {
+app.post('/loan-request',verifyFirebaseToken, async (req, res) => {
   try {
+    const { uid, role } = req.user;
     const authHeader = req.headers.authorization;
     const memberId = await getMemberIdFromAuth(authHeader); // Validate authorization and get memberId
     
@@ -711,7 +779,10 @@ app.post('/loan-request', async (req, res) => {
       nameOfSurety1, surety1MembersNo, surety1telePhone,
       nameOfSurety2, surety2MembersNo, surety2telePhone,
     } = req.body;
-
+  // Add authorization logic based on role
+  if (role !== 'member' && role !== 'cooperative-admin') {
+    return res.status(403).json({ error: 'Access denied' });
+  }
     // Validate required fields
     if (!cooperativeId || !amountRequired || !purposeOfLoan || !durationOfLoan || !bvn) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -755,42 +826,108 @@ app.post('/loan-request', async (req, res) => {
   }
 });
 
-
-// Fetch loan requests for a cooperative and member
-app.get('/loan-requests', async (req, res) => {
+// app.get('/loan-requests/:loanId/individual') - Refactored Route
+app.get('/loan-requests/:loanId/individual',verifyFirebaseToken, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    const memberId = await getMemberIdFromAuth(authHeader); // Get Firebase UID as memberId
+    const loanId = req.params.loanId;
+    console.log("Requested Loan ID:", loanId);
 
-    // Get the role from the user's custom claims
-    const user = await admin.auth().getUser(memberId);
-    const role = user.customClaims?.role;
+    // Fetch the loan request and associated member details
+    const loanRequest = await prisma.loansRequested.findUnique({
+      where: { id: loanId },
+      include: {
+        member: {
+          select: {
+            id: true,
+            firstName: true,
+            surname: true,
+            email: true,
+            memberDetails: { select: { telephone1: true } },
+          },
+        },
+      },
+    });
 
-    const { cooperativeId } = req.query; // cooperativeId is optional
-
-    let filter = {};
-
-    if (role === 'cooperative-admin' && cooperativeId) {
-      // Cooperative admin: Fetch all loan requests for the cooperative
-      filter = { cooperativeId };
-    } else if (role === 'member') {
-      // Member: Only fetch loan requests made by the member
-      filter = { memberId };
-    } else {
-      return res.status(403).json({ error: 'Unauthorized to view loan requests' });
+    // Check if the loan request exists
+    if (!loanRequest) {
+      console.log("Loan request not found for ID:", loanId);
+      return res.status(404).json({ error: 'Individual loan request not found.' });
     }
 
-    // Fetch loan requests based on the filter
+    // Fetch all transactions (savings history) for the member related to the loan request
+    const transactions = await prisma.memberSavings.findMany({
+      where: { memberId: loanRequest.member.id },
+      orderBy: { dateOfEntry: 'desc' },
+      select: {
+        id: true,
+        savingsBalance: true,
+        savingsDeposits: true,
+        dateOfEntry: true,
+      },
+    });
+
+    // Calculate grand total savings, last savings balance, and savings frequency
+    const grandTotal = transactions.reduce((total, txn) => total + txn.savingsDeposits - (txn.withdrawals || 0), 0);
+    const lastSavings = transactions[0]?.savingsDeposits || 0;
+    const savingsFrequency = transactions.length;
+
+    // Fetch the interest rate from the relevant model (e.g., LoanInterestSetting)
+    const loanInterestSetting = await prisma.loanInterestSetting.findFirst({
+      where: { cooperativeId: loanRequest.cooperativeId },
+      select: { durationInterestRate: true }
+    });
+    const interestRate = loanInterestSetting?.durationInterestRate || 0;
+
+    // Prepare the response data
+    const individualData = {
+      ...loanRequest,
+      interestRate,
+      grandTotal,
+      lastSavings,
+      savingsFrequency,
+      member: {
+        ...loanRequest.member,
+        transactions, // Attach the transactions directly under the member object
+      },
+    };
+
+    res.status(200).json(individualData);
+  } catch (error) {
+    console.error('Error fetching individual loan request:', error);
+    res.status(500).json({ error: 'Failed to fetch individual loan request', details: error.message });
+  }
+});
+
+
+// Fetch loan requests for a cooperative and member
+app.get('/loan-requests', verifyFirebaseToken, async (req, res) => {
+  const { role, cooperativeId, memberId } = req.user;
+
+  console.log("Role:", role);
+  console.log("Cooperative ID:", cooperativeId);
+  console.log("Member ID:", memberId);
+
+  try {
+    let filter = {};
+    if (role === 'cooperative-admin' && cooperativeId) {
+      filter = { cooperativeId };
+    } else if (role === 'member' && memberId) {
+      filter = { memberId };
+    } else {
+      console.log("403 Forbidden: Unauthorized role or missing ID");
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
     const loanRequests = await prisma.loansRequested.findMany({
       where: filter,
       include: {
         member: {
           include: {
-            memberDetails: true, // Include member details (e.g., surname, firstName, etc.)
-            memberSavings:true
+            memberDetails: true,
+            memberSavings: true,
           },
         },
-        cooperative: true, // Include cooperative details
+        cooperative: true,
       },
     });
 
@@ -807,8 +944,7 @@ app.get('/loan-requests', async (req, res) => {
 
 
 
-
-app.post('/loan-requests/:loanId/approve-reject', async (req, res) => {
+app.post('/loan-requests/:loanId/approve-reject',verifyFirebaseToken, async (req, res) => {
   try {
     const { loanId } = req.params;
     const { action } = req.body; // action can be 'approve' or 'reject'
@@ -853,7 +989,7 @@ app.post('/loan-requests/:loanId/approve-reject', async (req, res) => {
 });
 
 
-app.get('/member/profile', async (req, res) => {
+app.get('/member/profile',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -881,7 +1017,7 @@ app.get('/member/profile', async (req, res) => {
   }
 });
 
-app.post('/loan-request/status', async (req, res) => {
+app.post('/loan-request/status',verifyFirebaseToken, async (req, res) => {
   const { loanId, newStatus } = req.body;
 
   try {
@@ -950,7 +1086,7 @@ app.post('/loan-request/status', async (req, res) => {
   }
 });
 
-app.post('/loan-interest-settings', async (req, res) => {
+app.post('/loan-interest-settings',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -996,7 +1132,7 @@ app.post('/loan-interest-settings', async (req, res) => {
   }
 });
 
-app.put('/update-loan-interest-settings/:id', async (req, res) => {
+app.put('/update-loan-interest-settings/:id',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1028,7 +1164,33 @@ app.put('/update-loan-interest-settings/:id', async (req, res) => {
   }
 });
 
-app.get('/fetch-loan-interest-settings', async (req, res) => {
+// Ensure the route path starts with `/`
+app.put('/updateLoanAmount/:loanId', verifyFirebaseToken, async (req, res) => {
+  const { loanId } = req.params; // This is the loanId from the URL
+  const { amountGranted } = req.body;
+
+  // Validate the amountRequired
+  if (typeof amountGranted !== 'number' || amountGranted <= 0) {
+    return res.status(400).json({ error: 'Invalid loan amount provided' });
+  }
+
+  try {
+    // Update the loan amount in the Prisma database using `id` instead of `loanId`
+    const updatedLoan = await prisma.loansRequested.update({
+      where: { id: loanId }, // Use `id` field for lookup
+      data: { amountGranted },
+    });
+
+    res.json({ message: 'Loan amount updated successfully', loan: updatedLoan });
+  } catch (error) {
+    console.error('Error updating loan amount:', error);
+    res.status(500).json({ error: 'Failed to update loan amount' });
+  }
+});
+
+
+
+app.get('/fetch-loan-interest-settings',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1052,7 +1214,7 @@ app.get('/fetch-loan-interest-settings', async (req, res) => {
 
 
 // KYC submission route: /member-kyc
-app.post('/member-kyc', async (req, res) => {
+app.post('/member-kyc',verifyFirebaseToken, async (req, res) => {
   const { memberId, ...memberKycData } = req.body;
 
   try {
@@ -1094,7 +1256,7 @@ app.post('/member-kyc', async (req, res) => {
 });
 
 // Route to get specific member profile data
-app.get('/member/profileSettings', async (req, res) => {
+app.get('/member/profileSettings',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1129,7 +1291,7 @@ app.get('/member/profileSettings', async (req, res) => {
 });
 
 
-app.get('/members', async (req, res) => {
+app.get('/members',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1161,7 +1323,7 @@ app.get('/members', async (req, res) => {
 
 
 // app.post('/member/savings') - Route for handling savings deposits
-app.post('/member/savings', async (req, res) => {
+app.post('/member/savings',verifyFirebaseToken, async (req, res) => {
   try {
     const { amount } = req.body;
 
@@ -1214,7 +1376,7 @@ app.post('/member/savings', async (req, res) => {
 });
 
 // Updated Route to Fetch Transactions for Member or Cooperative
-app.get('/transactions', async (req, res) => {
+app.get('/transactions',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1286,7 +1448,7 @@ app.get('/transactions', async (req, res) => {
 });
 
 
-app.get('/single-transaction', async (req, res) => {
+app.get('/single-transaction',verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
