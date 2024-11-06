@@ -98,7 +98,8 @@ middleName        String
 dateOfEntry       DateTime @default(now())
 telephone1        String  @unique
 telephone2        String  @unique
-
+// bankName           String
+// accountNumber      String
 dateOfBirth       String
 sex               UserSex
 maritalStatus     String
@@ -115,7 +116,7 @@ nextOfKinName     String
 nextOfKinPhone    String
 nextOfKinPhone2   String
 sponsor           String
-  // img               String // <-- This field is required
+  // img               String? // <-- This field is required
 }
 
 model MemberSavings {
@@ -141,12 +142,12 @@ model LoanInterestSetting {
   id               String   @id @default(uuid())
   cooperative      Cooperative @relation(fields: [cooperativeId], references: [id])
   cooperativeId    String
-  minDurationMonths Int
-  maxDurationMonths Int
-  durationInterestRate Float
-  minAmount        Int
-  maxAmount        Int
-  amountInterestRate Float
+  minDurationMonths Int?
+  maxDurationMonths Int?
+  durationInterestRate Float?
+  minAmount        Int?
+  maxAmount        Int?
+  amountInterestRate Float?
   createdAt        DateTime @default(now())
 }
 

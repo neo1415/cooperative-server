@@ -278,11 +278,10 @@ async function verifyFirebaseToken(req, res, next) {
   const token = authHeader.split(' ')[1];
 
   try {
-    // Verify the token
     const decodedToken = await admin.auth().verifyIdToken(token);
-    console.log("Decoded token:", decodedToken); // Log the entire token to verify contents
+    console.log("Decoded token:", decodedToken);
 
-    // Initialize the user object with existing claims
+    // Initialize user data from token claims
     req.user = {
       uid: decodedToken.uid,
       role: decodedToken.role || null,
@@ -290,11 +289,10 @@ async function verifyFirebaseToken(req, res, next) {
       memberId: decodedToken.memberId || null,
     };
 
-    // Fetch cooperativeId from database if it's missing for a cooperative admin
     if (req.user.role === 'cooperative-admin' && !req.user.cooperativeId) {
       const cooperative = await prisma.cooperative.findUnique({
         where: { id: req.user.uid },
-        select: { id: true },
+        select: { id: true }
       });
 
       if (cooperative) {
@@ -305,22 +303,21 @@ async function verifyFirebaseToken(req, res, next) {
       }
     }
 
-      // Fetch cooperativeId from database if it's missing for a cooperative admin
-      if (req.user.role === 'member' && !req.user.memberId) {
-        const member = await prisma.member.findUnique({
-          where: { id: req.user.uid },
-          select: { id: true },
-        });
-  
-        if (member) {
-          req.user.memberId = member.id;
-        } else {
-          console.log("403 Forbidden: Member admin not found in database");
-          return res.status(403).json({ error: 'Unauthorized: Cooperative admin not found' });
-        }
-      }
+    if (req.user.role === 'member' && !req.user.memberId) {
+      const member = await prisma.member.findUnique({
+        where: { id: req.user.uid },
+        select: { id: true, cooperativeId: true },
+      });
 
-    // Ensure the role is present, or reject the request
+      if (member) {
+        req.user.memberId = member.id;
+        req.user.cooperativeId = member.cooperativeId;
+      } else {
+        console.log("403 Forbidden: Member not found in database");
+        return res.status(403).json({ error: 'Unauthorized: Member not found' });
+      }
+    }
+
     if (!req.user.role) {
       console.log("403 Forbidden: Missing role claim");
       return res.status(403).json({ error: 'Unauthorized: Missing role claim' });
@@ -647,6 +644,8 @@ app.get('/cooperative/profileSettings',verifyFirebaseToken, async (req, res) => 
 
     // Return the cooperative data and totals
     res.status(200).json({ ...cooperative, totals });
+    console.log({ ...cooperative, totals });
+
   } catch (error) {
     console.error('Error fetching cooperative profile:', error);
     res.status(500).json({ error: 'Failed to fetch cooperative profile', details: error.message });
@@ -768,48 +767,54 @@ async function findCooperativeById(cooperativeId) {
 }
 
 // Main route handler for loan request creation
-app.post('/loan-request',verifyFirebaseToken, async (req, res) => {
+app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
   try {
-    const { uid, role } = req.user;
-    const authHeader = req.headers.authorization;
-    const memberId = await getMemberIdFromAuth(authHeader); // Validate authorization and get memberId
-    
+    const { uid, role, memberId, cooperativeId } = req.user;
     const {
-      cooperativeId, amountRequired, purposeOfLoan, durationOfLoan, bvn,
-      nameOfSurety1, surety1MembersNo, surety1telePhone,
-      nameOfSurety2, surety2MembersNo, surety2telePhone,
+      amountRequired,
+      purposeOfLoan,
+      durationOfLoan,
+      bvn,
+      nameOfSurety1,
+      surety1MembersNo,
+      surety1telePhone,
+      nameOfSurety2,
+      surety2MembersNo,
+      surety2telePhone,
     } = req.body;
-  // Add authorization logic based on role
-  if (role !== 'member' && role !== 'cooperative-admin') {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-    // Validate required fields
-    if (!cooperativeId || !amountRequired || !purposeOfLoan || !durationOfLoan || !bvn) {
+
+    // Basic role and required field validation
+    if (role !== 'member' && role !== 'cooperative-admin') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!cooperativeId || !memberId || !amountRequired || !purposeOfLoan || !durationOfLoan || !bvn) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const member = await findMemberById(memberId); // Check if the member exists
-    const cooperative = await findCooperativeById(cooperativeId); // Check if the cooperative exists
-
-    // Calculate interest and repayment details
+    // Parse and calculate values
+    const parsedAmountRequired = parseInt(amountRequired, 10);
+    const parsedDurationOfLoan = parseInt(durationOfLoan, 10);
     const interestRate = 10.0;
-    const amountGranted = parseFloat(amountRequired);
-    const loanInterest = amountGranted * (interestRate / 100) * (parseInt(durationOfLoan) / 12);
+    const loanInterest = Math.round(parsedAmountRequired * (interestRate / 100) * (parsedDurationOfLoan / 12));
     const expectedReimbursementDate = new Date();
-    expectedReimbursementDate.setMonth(expectedReimbursementDate.getMonth() + parseInt(durationOfLoan));
+    expectedReimbursementDate.setMonth(expectedReimbursementDate.getMonth() + parsedDurationOfLoan);
 
-    // Create the loan request
+    // Database operation
     const loansRequested = await prisma.loansRequested.create({
       data: {
         cooperative: { connect: { id: cooperativeId } },
         member: { connect: { id: memberId } },
-        amountRequired: amountGranted,
+        amountRequired: parsedAmountRequired,
         purposeOfLoan,
-        durationOfLoan: parseInt(durationOfLoan),
+        durationOfLoan: parsedDurationOfLoan,
         bvn,
-        nameOfSurety1, surety1MembersNo, surety1telePhone,
-        nameOfSurety2, surety2MembersNo, surety2telePhone,
-        amountGranted,
+        nameOfSurety1,
+        surety1MembersNo,
+        surety1telePhone,
+        nameOfSurety2,
+        surety2MembersNo,
+        surety2telePhone,
+        amountGranted: parsedAmountRequired,
         loanInterest,
         expectedReimbursementDate,
         pending: true,
@@ -1086,83 +1091,104 @@ app.post('/loan-request/status',verifyFirebaseToken, async (req, res) => {
   }
 });
 
-app.post('/loan-interest-settings',verifyFirebaseToken, async (req, res) => {
+app.post('/loan-interest-settings', verifyFirebaseToken, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.error("Authorization header is missing or incorrect");
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-
-    // Get the cooperativeId from uid
-    const cooperativeId = decodedToken.uid;
-
-    const { settings } = req.body;
-
-    if (!cooperativeId) {
-      console.error("Missing cooperative ID in decoded token");
-      return res.status(400).json({ error: 'Missing cooperative ID' });
-    }
+    const { cooperativeId } = req.user;
+    const settings = req.body;
 
     const savedSettings = await Promise.all(
       settings.map(async (setting) => {
         return await prisma.loanInterestSetting.create({
           data: {
             cooperativeId,
-            minDurationMonths: setting.minDuration,
-            maxDurationMonths: setting.maxDuration,
-            durationInterestRate: setting.durationRate,
+            minDurationMonths: setting.minDurationMonths,
+            maxDurationMonths: setting.maxDurationMonths,
+            durationInterestRate: setting.durationInterestRate,
             minAmount: setting.minAmount,
             maxAmount: setting.maxAmount,
-            amountInterestRate: setting.amountRate,
+            amountInterestRate: setting.amountInterestRate,
           },
         });
       })
     );
-    
 
     res.status(201).json(savedSettings);
   } catch (error) {
     console.error("Error saving loan interest settings:", error);
-    res.status(500).json({ error: error.message || 'Failed to save loan interest settings' });
+    res.status(500).json({ error: 'Failed to save loan interest settings' });
   }
 });
 
-app.put('/update-loan-interest-settings/:id',verifyFirebaseToken, async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
 
-    const token = authHeader.split(' ')[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    const cooperativeId = decodedToken.uid;
+// PUT: Update loan interest setting by ID
+app.put('/edit-loan-interest-setting/:id', verifyFirebaseToken, async (req, res) => {
+  try {
     const { id } = req.params;
     const { minDurationMonths, maxDurationMonths, durationInterestRate, minAmount, maxAmount, amountInterestRate } = req.body;
 
     const updatedSetting = await prisma.loanInterestSetting.update({
-      where: { id: Number(id), cooperativeId },
-      data: {
-        minDurationMonths,
-        maxDurationMonths,
-        durationInterestRate,
-        minAmount,
-        maxAmount,
-        amountInterestRate,
-      },
+      where: { id },
+      data: { minDurationMonths, maxDurationMonths, durationInterestRate, minAmount, maxAmount, amountInterestRate },
     });
 
     res.status(200).json(updatedSetting);
   } catch (error) {
-    console.error("Error updating loan interest setting:", error);
+    console.error('Error updating loan interest setting:', error);
     res.status(500).json({ error: 'Failed to update loan interest setting' });
   }
 });
+
+
+app.get('/fetch-loan-interest-settings', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { cooperativeId, role, memberId } = req.user; // Ensure `memberId` is defined only when role is 'member'
+
+    // Log the role and cooperativeId, and conditionally log memberId if the role is 'member'
+    console.log("Role:", role);
+    console.log("Cooperative ID:", cooperativeId);
+    if (role === 'member') {
+      console.log("Member ID:", memberId);
+    }
+
+    // Ensure cooperativeId exists and user has the right permissions
+    if (!cooperativeId) {
+      return res.status(403).json({ error: 'Unauthorized: Cooperative ID missing' });
+    }
+    if (!['cooperative-admin', 'member'].includes(role)) {
+      return res.status(403).json({ error: 'Unauthorized: Insufficient permissions' });
+    }
+
+    // Fetch loan interest settings for the cooperative
+    const settings = await prisma.loanInterestSetting.findMany({
+      where: { cooperativeId },
+    });
+
+    if (!settings.length) {
+      return res.status(404).json({ error: 'No loan interest settings found.' });
+    }
+
+    res.status(200).json(settings);
+    console.log("Loan interest settings fetched:", settings);
+  } catch (error) {
+    console.error("Error fetching loan interest settings:", error);
+    res.status(500).json({ error: 'Failed to fetch loan interest settings' });
+  }
+});
+
+
+app.delete('/delete-loan-interest-setting/:id', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.loanInterestSetting.delete({ where: { id } });
+    res.status(200).json({ message: 'Setting deleted successfully' });
+  } catch (error) {
+    console.error("Error deleting loan interest setting:", error);
+    res.status(500).json({ error: 'Failed to delete setting' });
+  }
+});
+
+
+
 
 // Ensure the route path starts with `/`
 app.put('/updateLoanAmount/:loanId', verifyFirebaseToken, async (req, res) => {
@@ -1188,29 +1214,6 @@ app.put('/updateLoanAmount/:loanId', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-
-
-app.get('/fetch-loan-interest-settings',verifyFirebaseToken, async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    const cooperativeId = decodedToken.uid;
-
-    const settings = await prisma.loanInterestSetting.findMany({
-      where: { cooperativeId },
-    });
-
-    res.status(200).json(settings);
-  } catch (error) {
-    console.error("Error fetching loan interest settings:", error);
-    res.status(500).json({ error: 'Failed to fetch loan interest settings' });
-  }
-});
 
 
 // KYC submission route: /member-kyc
