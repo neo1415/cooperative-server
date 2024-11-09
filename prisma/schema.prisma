@@ -42,7 +42,7 @@ model CooperativeDetails{
      cooperativeName       String?  
        email                 String?   
   registrationNumber    String   @unique
-  // img                   String? 
+  img                   String? 
   dateOfIncorporation   DateTime
   cooperative            Cooperative?  @relation(fields: [cooperativeId], references: [id])
   address               String
@@ -98,8 +98,8 @@ middleName        String
 dateOfEntry       DateTime @default(now())
 telephone1        String  @unique
 telephone2        String  @unique
-// bankName           String
-// accountNumber      String
+bankName           String
+accountNumber      String
 dateOfBirth       String
 sex               UserSex
 maritalStatus     String
@@ -116,7 +116,7 @@ nextOfKinName     String
 nextOfKinPhone    String
 nextOfKinPhone2   String
 sponsor           String
-  // img               String? // <-- This field is required
+  img               String? // <-- This field is required
 }
 
 model MemberSavings {
@@ -179,6 +179,7 @@ model LoansRequested {
   paymentVoucherNO      String?
   amountGranted         Int?
   loanInterest          Int?
+  interestRate                 Float? 
   repaymentsPrincipal   Int?
  expectedReimbursementDate        DateTime
   repaymentsInterest    Int?

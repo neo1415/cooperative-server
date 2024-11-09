@@ -16,6 +16,7 @@ const { body, param,validationResult } = require('express-validator');
 const fs = require('fs');
 const path = require('path');
 const app = express();
+const cloudinary = require('cloudinary').v2;
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
@@ -463,7 +464,7 @@ app.post('/login', async (req, res) => {
 // User registration route
 
 // Route for user registration
-app.post('/register',verifyFirebaseToken, async (req, res) => {
+app.post('/register', async (req, res) => {
   const { email, cooperativeName, password } = req.body;
 
   try {
@@ -557,19 +558,20 @@ app.post('/cooperative-kyc',verifyFirebaseToken, async (req, res) => {
   }
 });
 
-app.get('/cooperatives',verifyFirebaseToken, async (req, res) => {
+app.get('/cooperatives', async (req, res) => {
   try {
     const cooperatives = await prisma.cooperative.findMany({
       select: { id: true, cooperativeName: true },
     });
-    res.status(200).json(cooperatives);
+    res.status(200).json(cooperatives); // Ensure this is always an array
   } catch (error) {
     console.error('Error fetching cooperatives:', error);
     res.status(500).json({ error: 'Failed to fetch cooperatives' });
   }
 });
 
-app.get('/get-cooperatives',verifyFirebaseToken, async (req, res) => {
+
+app.get('/get-cooperocker hubatives',verifyFirebaseToken, async (req, res) => {
   try {
     const cooperatives = await prisma.cooperative.findMany({
       include: {
@@ -654,7 +656,7 @@ app.get('/cooperative/profileSettings',verifyFirebaseToken, async (req, res) => 
 
 
 
-app.post('/register-member',verifyFirebaseToken, async (req, res) => {
+app.post('/register-member', async (req, res) => {
   const { email, firstName, surname, cooperativeId, password } = req.body;
 
   try {
@@ -832,7 +834,7 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
 });
 
 // app.get('/loan-requests/:loanId/individual') - Refactored Route
-app.get('/loan-requests/:loanId/individual',verifyFirebaseToken, async (req, res) => {
+app.get('/loan-requests/:loanId/individual', verifyFirebaseToken, async (req, res) => {
   try {
     const loanId = req.params.loanId;
     console.log("Requested Loan ID:", loanId);
@@ -876,17 +878,10 @@ app.get('/loan-requests/:loanId/individual',verifyFirebaseToken, async (req, res
     const lastSavings = transactions[0]?.savingsDeposits || 0;
     const savingsFrequency = transactions.length;
 
-    // Fetch the interest rate from the relevant model (e.g., LoanInterestSetting)
-    const loanInterestSetting = await prisma.loanInterestSetting.findFirst({
-      where: { cooperativeId: loanRequest.cooperativeId },
-      select: { durationInterestRate: true }
-    });
-    const interestRate = loanInterestSetting?.durationInterestRate || 0;
-
-    // Prepare the response data
+    // Prepare the response data, using loanInterest as the interest rate
     const individualData = {
       ...loanRequest,
-      interestRate,
+      loanInterest: loanRequest.loanInterest || 0,  // Ensure loanInterest is included
       grandTotal,
       lastSavings,
       savingsFrequency,
@@ -902,6 +897,7 @@ app.get('/loan-requests/:loanId/individual',verifyFirebaseToken, async (req, res
     res.status(500).json({ error: 'Failed to fetch individual loan request', details: error.message });
   }
 });
+
 
 
 // Fetch loan requests for a cooperative and member
@@ -994,7 +990,7 @@ app.post('/loan-requests/:loanId/approve-reject',verifyFirebaseToken, async (req
 });
 
 
-app.get('/member/profile',verifyFirebaseToken, async (req, res) => {
+app.get('/member/profile', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1215,51 +1211,106 @@ app.put('/updateLoanAmount/:loanId', verifyFirebaseToken, async (req, res) => {
 });
 
 
-
 // KYC submission route: /member-kyc
-app.post('/member-kyc',verifyFirebaseToken, async (req, res) => {
-  const { memberId, ...memberKycData } = req.body;
+const multer = require('multer');
+const upload = multer(); // This will store files in memory for processing
 
-  try {
-    if (!memberId || Object.keys(memberKycData).length === 0) {
-      return res.status(400).json({ error: 'Member ID or KYC data is missing.' });
-    }
+const uploadImageToCloudinary = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "kyc_images" },  // Specify the Cloudinary folder
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result.secure_url);
+        }
+      }
+    );
+    stream.end(buffer); // End the stream with the buffer to upload
+  });
+};
 
-    const member = await prisma.member.findUnique({
-      where: { id: memberId },
-    });
+// Your updated POST route
+app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, res) => {
+  const memberId = req.body.memberId;
+  const memberKycData = req.body;
 
-    if (!member) {
-      return res.status(404).json({ error: 'Member not found.' });
-    }
+  console.log("Received memberId:", memberId);
+  console.log("Received KYC data:", memberKycData);
+  console.log("Received image file:", req.file);
 
-    const membersDetails = await prisma.membersDetails.create({
-      data: {
-        member: { connect: { id: memberId } },
-        ...memberKycData,
-      },
-    });
-
-    const firebaseUser = await admin.auth().getUser(memberId);
-    const currentClaims = firebaseUser.customClaims || {};
-
-    await admin.auth().setCustomUserClaims(firebaseUser.uid, {
-      ...currentClaims,
-      kycCompleted: true,
-    });
-
-    res.status(200).json({
-      message: 'KYC completed successfully',
-      membersDetails,
-    });
-  } catch (error) {
-    console.error('Error processing KYC:', error);
-    res.status(500).json({ error: 'Error during KYC processing', details: error.message });
+  if (!memberId || Object.keys(memberKycData).length === 0) {
+    console.log("Bad Request: Member ID or KYC data is missing");
+    return res.status(400).json({ error: "Member ID or KYC data is missing." });
   }
+
+  let imageUrl = null;
+  if (req.file) {
+    try {
+      console.log("Uploading image to Cloudinary...");
+      imageUrl = await uploadImageToCloudinary(req.file.buffer);  // Correct usage here
+      console.log("Image uploaded successfully, URL:", imageUrl);
+    } catch (error) {
+      console.error("Error uploading image to Cloudinary:", error);
+      return res.status(500).json({ error: "Failed to upload image" });
+    }
+  }
+
+try {
+  const membersDetails = await prisma.membersDetails.create({
+    data: {
+      member: { connect: { id: memberId } }, // Connects the member relation
+      img: imageUrl || null, // Use the image URL or null
+      middleName: memberKycData.middleName,
+      dateOfEntry: new Date(memberKycData.dateOfEntry).toISOString(), // Convert to string
+      telephone1: memberKycData.telephone1,
+      telephone2: memberKycData.telephone2,
+      bvn: memberKycData.bvn,
+      dateOfBirth: new Date(memberKycData.dateOfBirth).toISOString(), // Convert to string
+      sex: memberKycData.sex,
+      maritalStatus: memberKycData.maritalStatus,
+      occupation: memberKycData.occupation,
+      business: memberKycData.business,
+      residentialAddress: memberKycData.residentialAddress,
+      lga: memberKycData.lga,
+      state: memberKycData.state,
+      permanentHomeAddress: memberKycData.permanentHomeAddress,
+      stateOfOrigin: memberKycData.stateOfOrigin,
+      lga2: memberKycData.lga2,
+      amountPaid: memberKycData.amountPaid,
+      accountNumber: memberKycData.accountNumber,
+      bankName: memberKycData.bankName,
+      nextOfKinName: memberKycData.nextOfKinName,
+      nextOfKinPhone: memberKycData.nextOfKinPhone,
+      nextOfKinPhone2: memberKycData.nextOfKinPhone2,
+      sponsor: memberKycData.sponsor,
+    },
+  });
+
+  console.log("KYC details saved successfully:", membersDetails);
+
+  const firebaseUser = await admin.auth().getUser(memberId);
+  const currentClaims = firebaseUser.customClaims || {};
+
+  console.log("Setting custom claims for user...");
+  await admin.auth().setCustomUserClaims(firebaseUser.uid, {
+    ...currentClaims,
+    kycCompleted: true,
+  });
+
+  res.status(200).json({
+    message: "KYC completed successfully",
+    membersDetails,
+  });
+} catch (error) {
+  console.error("Error processing KYC:", error);
+  res.status(500).json({ error: "Error during KYC processing", details: error.message });
+}
 });
 
 // Route to get specific member profile data
-app.get('/member/profileSettings',verifyFirebaseToken, async (req, res) => {
+app.get('/member/profileSettings', verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1275,15 +1326,21 @@ app.get('/member/profileSettings',verifyFirebaseToken, async (req, res) => {
       where: { id: memberId },
       include: { 
         memberDetails: true,
-        loansRequested:true,
-        loansApproved:true,
-        memberSavings:true,
-
-       }, // Includes memberDetails
+        loansRequested: true,
+        loansApproved: true,
+        memberSavings: true,
+      },
     });
 
     if (!member) {
-      return res.status(404).json({ error: 'Member not found' });
+      // Return empty data if the member doesn't exist
+      return res.status(200).json({
+        id: memberId,
+        memberDetails: null,
+        loansRequested: [],
+        loansApproved: [],
+        memberSavings: [],
+      });
     }
 
     res.status(200).json(member);
@@ -1505,8 +1562,21 @@ app.get('/single-transaction',verifyFirebaseToken, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    if (!transaction) {
-      return res.status(404).json({ error: 'Transaction not found' });
+   if (!transaction) {
+      // Return default transaction data if not found
+      return res.status(200).json({
+        id: '',
+        firstName: 'N/A',
+        surname: 'N/A',
+        email: 'N/A',
+        dateOfEntry: 'N/A',
+        telephone: 'N/A',
+        savingsDeposits: 0,
+        withdrawals: 0,
+        savingsBalance: 0,
+        totalWithdrawals: 0,
+        grandTotal: 0,
+      });
     }
 
     const flattenedTransaction = {
