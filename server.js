@@ -289,6 +289,61 @@ const uploadImageToCloudinary = (buffer) => {
   });
 };
 
+
+async function printSchemaDetails() {
+  try {
+    // Query the Prisma internal database tables for model metadata
+    const models = await prisma.$queryRaw`SELECT * FROM information_schema.tables WHERE table_schema = 'public'`;
+
+    // Iterate through each model and print details
+    for (const model of models) {
+      const modelName = model.table_name;
+      console.log(`\nModel: ${modelName}`);
+
+      // Query columns (fields) for the model
+      const fields = await prisma.$queryRaw`SELECT column_name, data_type 
+                                           FROM information_schema.columns 
+                                           WHERE table_name = ${modelName} 
+                                           AND table_schema = 'public'`;
+
+      console.log('Fields:');
+      fields.forEach(field => {
+        console.log(`- ${field.column_name} (${field.data_type})`);
+      });
+
+      // Query relations (foreign keys) for the model
+      const relations = await prisma.$queryRaw`SELECT 
+                                                   kcu.column_name AS foreign_column,
+                                                   ccu.table_name AS referenced_table,
+                                                   ccu.column_name AS referenced_column
+                                               FROM 
+                                                   information_schema.key_column_usage AS kcu
+                                               JOIN 
+                                                   information_schema.constraint_column_usage AS ccu
+                                               ON 
+                                                   kcu.constraint_name = ccu.constraint_name
+                                               WHERE 
+                                                   kcu.table_name = ${modelName}`;
+
+      if (relations.length > 0) {
+        console.log('Relations:');
+        relations.forEach(relation => {
+          console.log(`- ${relation.foreign_column} → ${relation.referenced_table}.${relation.referenced_column}`);
+        });
+      } else {
+        console.log('No relations found.');
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching schema details:', error);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+printSchemaDetails();
+
+
 // Middleware to verify Firebase token and fetch cooperativeId if missing
 async function verifyFirebaseToken(req, res, next) {
   const authHeader = req.headers.authorization;
