@@ -40,9 +40,9 @@ model Cooperative {
 model CooperativeDetails{
   cooperativeId          String    // Foreign key to Cooperative
      cooperativeName       String?  
-       email                 String?   
-  registrationNumber    String   @unique
-  img                   String? 
+       email                 String @unique  
+  registrationNumber    String?
+  // img                   String? 
   dateOfIncorporation   DateTime
   cooperative            Cooperative?  @relation(fields: [cooperativeId], references: [id])
   address               String
