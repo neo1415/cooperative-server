@@ -290,59 +290,6 @@ const uploadImageToCloudinary = (buffer) => {
 };
 
 
-async function printSchemaDetails() {
-  try {
-    // Query the Prisma internal database tables for model metadata
-    const models = await prisma.$queryRaw`SELECT * FROM information_schema.tables WHERE table_schema = 'public'`;
-
-    // Iterate through each model and print details
-    for (const model of models) {
-      const modelName = model.table_name;
-      console.log(`\nModel: ${modelName}`);
-
-      // Query columns (fields) for the model
-      const fields = await prisma.$queryRaw`SELECT column_name, data_type 
-                                           FROM information_schema.columns 
-                                           WHERE table_name = ${modelName} 
-                                           AND table_schema = 'public'`;
-
-      console.log('Fields:');
-      fields.forEach(field => {
-        console.log(`- ${field.column_name} (${field.data_type})`);
-      });
-
-      // Query relations (foreign keys) for the model
-      const relations = await prisma.$queryRaw`SELECT 
-                                                   kcu.column_name AS foreign_column,
-                                                   ccu.table_name AS referenced_table,
-                                                   ccu.column_name AS referenced_column
-                                               FROM 
-                                                   information_schema.key_column_usage AS kcu
-                                               JOIN 
-                                                   information_schema.constraint_column_usage AS ccu
-                                               ON 
-                                                   kcu.constraint_name = ccu.constraint_name
-                                               WHERE 
-                                                   kcu.table_name = ${modelName}`;
-
-      if (relations.length > 0) {
-        console.log('Relations:');
-        relations.forEach(relation => {
-          console.log(`- ${relation.foreign_column} → ${relation.referenced_table}.${relation.referenced_column}`);
-        });
-      } else {
-        console.log('No relations found.');
-      }
-    }
-  } catch (error) {
-    console.error('Error fetching schema details:', error);
-  } finally {
-    await prisma.$disconnect();
-  }
-}
-
-printSchemaDetails();
-
 
 // Middleware to verify Firebase token and fetch cooperativeId if missing
 async function verifyFirebaseToken(req, res, next) {
@@ -1071,6 +1018,7 @@ app.get('/loan-requests', verifyFirebaseToken, async (req, res) => {
           include: {
             memberDetails: true,
             memberSavings: true,
+            loansApproved:true,
           },
         },
         cooperative: true,
@@ -1088,6 +1036,57 @@ app.get('/loan-requests', verifyFirebaseToken, async (req, res) => {
   }
 });
 
+app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { role, memberId, cooperativeId } = req.user;
+    console.log('User role:', role);
+    console.log('User memberId:', memberId);
+    console.log('User cooperativeId:', cooperativeId);
+
+    let filter = {};
+
+    if (role === 'cooperative-admin' && cooperativeId) {
+      filter.cooperativeId = cooperativeId;
+    } else if (role === 'member' && memberId) {
+      filter.memberId = memberId;
+    } else {
+      console.warn('Unauthorized access attempt:', req.user);
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    console.log('Filter applied to loan stats query:', filter);
+
+    const [totalLoans, approvedLoans, rejectedLoans, pendingLoans, totalRequestedAmount, totalGrantedAmount] = await Promise.all([
+      prisma.loansRequested.count({ where: filter }),
+      prisma.loansRequested.count({ where: { ...filter, approved: true } }),
+      prisma.loansRequested.count({ where: { ...filter, rejected: true } }),
+      prisma.loansRequested.count({ where: { ...filter, pending: true } }),
+      prisma.loansRequested.aggregate({ where: filter, _sum: { amountRequired: true } }),
+      prisma.loansRequested.aggregate({ where: { ...filter, approved: true }, _sum: { amountGranted: true } })
+    ]);
+
+    console.log('Loan Stats Results:', {
+      totalLoans,
+      approvedLoans,
+      rejectedLoans,
+      pendingLoans,
+      totalRequestedAmount: totalRequestedAmount._sum.amountRequired || 0,
+      totalGrantedAmount: totalGrantedAmount._sum.amountGranted || 0
+    });
+
+    res.status(200).json({
+      totalLoans,
+      approvedLoans,
+      rejectedLoans,
+      pendingLoans,
+      totalRequestedAmount: totalRequestedAmount._sum.amountRequired || 0,
+      totalGrantedAmount: totalGrantedAmount._sum.amountGranted || 0
+    });
+  } catch (error) {
+    console.error('Error fetching loan statistics:', error);
+    res.status(500).json({ error: 'Failed to fetch loan statistics', details: error.message });
+  }
+});
 
 
 app.post('/loan-requests/:loanId/approve-reject',verifyFirebaseToken, async (req, res) => {
@@ -1308,7 +1307,7 @@ app.get('/fetch-loan-interest-settings', verifyFirebaseToken, async (req, res) =
     }
 
     res.status(200).json(settings);
-    console.log("Loan interest settings fetched:", settings);
+    // console.log("Loan interest settings fetched:", settings);
   } catch (error) {
     console.error("Error fetching loan interest settings:", error);
     res.status(500).json({ error: 'Failed to fetch loan interest settings' });
@@ -1561,7 +1560,7 @@ app.post('/member/savings',verifyFirebaseToken, async (req, res) => {
 });
 
 // Updated Route to Fetch Transactions for Member or Cooperative
-app.get('/transactions',verifyFirebaseToken, async (req, res) => {
+app.get('/transactions', verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1571,11 +1570,9 @@ app.get('/transactions',verifyFirebaseToken, async (req, res) => {
     const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
     const memberId = decodedToken.uid;
-
-    const user = await admin.auth().getUser(memberId);
-    const role = user.customClaims?.role;
-
+    const role = decodedToken.role;
     const cooperativeId = req.query.cooperativeId;
+
     let transactions;
 
     if (role === 'cooperative-admin' && cooperativeId) {
@@ -1612,25 +1609,37 @@ app.get('/transactions',verifyFirebaseToken, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized to view transactions' });
     }
 
-    console.log('Transactions returned:', transactions); // Log the transactions array
     if (transactions.length === 0) {
       console.log('No transactions found for the provided ID.');
     }
 
-    const flattenedTransactions = transactions.map((transaction) => ({
-      ...transaction,
-      firstName: transaction.member?.firstName,
-      surname: transaction.member?.surname,
-      email: transaction.member?.email,
-      telephone: transaction.member?.memberDetails?.telephone1,
+    // Fetch loans for each member to calculate the total loans granted as withdrawals
+    const transactionsWithLoans = await Promise.all(transactions.map(async (transaction) => {
+      const approvedLoans = await prisma.loansApproved.findMany({
+        where: { memberId: transaction.memberId },
+        select: { amountGranted: true },
+      });
+
+      const totalLoansGranted = approvedLoans.reduce((total, loan) => total + loan.amountGranted, 0);
+
+      return {
+        ...transaction,
+        firstName: transaction.member?.firstName,
+        surname: transaction.member?.surname,
+        email: transaction.member?.email,
+        telephone: transaction.member?.memberDetails?.telephone1,
+        withdrawals: totalLoansGranted, // Total loans granted as "withdrawals"
+        savingsBalance: transaction.savingsBalance - totalLoansGranted, // Adjusted balance
+      };
     }));
 
-    res.status(200).json(flattenedTransactions);
+    res.status(200).json(transactionsWithLoans);
   } catch (error) {
     console.error('Error fetching transactions:', error);
     res.status(500).json({ error: 'Failed to fetch transactions' });
   }
 });
+
 
 
 // Modified route for fetching a single transaction
@@ -1648,7 +1657,7 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
     const memberId = decodedToken.uid;
 
     let transaction;
-    let totalLoansGranted = 0; // Initialize total loan amount
+    let totalLoansGranted = 0;
 
     // Fetch the total amount of loans approved for the member
     const approvedLoans = await prisma.loansApproved.findMany({
@@ -1656,7 +1665,6 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
       select: { amountGranted: true },
     });
 
-    // Calculate the total amount of loans granted
     totalLoansGranted = approvedLoans.reduce((total, loan) => total + loan.amountGranted, 0);
 
     if (cooperativeId && decodedToken.role === 'cooperative-admin') {
@@ -1704,12 +1712,12 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
         savingsDeposits: 0,
         withdrawals: 0,
         savingsBalance: 0,
-        totalWithdrawals: totalLoansGranted, // Total loans granted
+        totalWithdrawals: totalLoansGranted,
         grandTotal: 0,
       });
     }
 
-    // Adjust the savings balance to account for total loans granted
+    // Calculate grand total: user's total savings minus approved loans
     const adjustedSavingsBalance = transaction.savingsBalance - totalLoansGranted;
 
     const flattenedTransaction = {
@@ -1718,8 +1726,8 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
       surname: transaction.member?.surname,
       email: transaction.member?.email,
       telephone: transaction.member?.memberDetails?.telephone1,
-      totalWithdrawals: totalLoansGranted, // Use total loans granted
-      savingsBalance: adjustedSavingsBalance, // Adjusted balance
+      totalWithdrawals: totalLoansGranted, // Total loans granted
+      savingsBalance: adjustedSavingsBalance,
     };
 
     res.status(200).json(flattenedTransaction);
