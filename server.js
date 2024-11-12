@@ -861,6 +861,14 @@ async function findCooperativeById(cooperativeId) {
 }
 
 // Main route handler for loan request creation
+// Utility function to format a date as dd.mm.yyyy
+function formatDate(date) {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0'); // Months are zero-based
+  const year = date.getFullYear();
+  return `${day}.${month}.${year}`;
+}
+
 app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
   try {
     const { uid, role, memberId, cooperativeId } = req.user;
@@ -875,9 +883,9 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
       nameOfSurety2,
       surety2MembersNo,
       surety2telePhone,
+      loanInterest,
     } = req.body;
 
-    // Basic role and required field validation
     if (role !== 'member' && role !== 'cooperative-admin') {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -885,15 +893,20 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Parse and calculate values
     const parsedAmountRequired = parseInt(amountRequired, 10);
     const parsedDurationOfLoan = parseInt(durationOfLoan, 10);
-    const interestRate = 10.0;
-    const loanInterest = Math.round(parsedAmountRequired * (interestRate / 100) * (parsedDurationOfLoan / 12));
-    const expectedReimbursementDate = new Date();
-    expectedReimbursementDate.setMonth(expectedReimbursementDate.getMonth() + parsedDurationOfLoan);
+    const formattedLoanInterest = parseFloat(loanInterest.toFixed(2));
 
-    // Database operation
+    const interestAmount = parsedAmountRequired * (formattedLoanInterest / 100) * (parsedDurationOfLoan / 12);
+    const expectedAmountToBePaidBack = parsedAmountRequired + interestAmount;
+
+    const reimbursementDate = new Date();
+    reimbursementDate.setMonth(reimbursementDate.getMonth() + parsedDurationOfLoan);
+    const formattedReimbursementDate = formatDate(reimbursementDate);
+
+    const dateOfApplication = new Date();
+    const formattedDateOfApplication = formatDate(dateOfApplication);
+
     const loansRequested = await prisma.loansRequested.create({
       data: {
         cooperative: { connect: { id: cooperativeId } },
@@ -909,8 +922,10 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
         surety2MembersNo,
         surety2telePhone,
         amountGranted: parsedAmountRequired,
-        loanInterest,
-        expectedReimbursementDate,
+        loanInterest: formattedLoanInterest,
+        expectedAmountToBePaidBack: parseFloat(expectedAmountToBePaidBack.toFixed(2)),
+        expectedReimbursementDate: formattedReimbursementDate,
+        dateOfApplication: formattedDateOfApplication,
         pending: true,
       },
     });
@@ -925,13 +940,13 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
   }
 });
 
+
+
 // app.get('/loan-requests/:loanId/individual') - Refactored Route
 app.get('/loan-requests/:loanId/individual', verifyFirebaseToken, async (req, res) => {
   try {
     const loanId = req.params.loanId;
-    console.log("Requested Loan ID:", loanId);
 
-    // Fetch the loan request and associated member details
     const loanRequest = await prisma.loansRequested.findUnique({
       where: { id: loanId },
       include: {
@@ -947,13 +962,10 @@ app.get('/loan-requests/:loanId/individual', verifyFirebaseToken, async (req, re
       },
     });
 
-    // Check if the loan request exists
     if (!loanRequest) {
-      console.log("Loan request not found for ID:", loanId);
       return res.status(404).json({ error: 'Individual loan request not found.' });
     }
 
-    // Fetch all transactions (savings history) for the member related to the loan request
     const transactions = await prisma.memberSavings.findMany({
       where: { memberId: loanRequest.member.id },
       orderBy: { dateOfEntry: 'desc' },
@@ -965,21 +977,20 @@ app.get('/loan-requests/:loanId/individual', verifyFirebaseToken, async (req, re
       },
     });
 
-    // Calculate grand total savings, last savings balance, and savings frequency
     const grandTotal = transactions.reduce((total, txn) => total + txn.savingsDeposits - (txn.withdrawals || 0), 0);
     const lastSavings = transactions[0]?.savingsDeposits || 0;
     const savingsFrequency = transactions.length;
 
-    // Prepare the response data, using loanInterest as the interest rate
     const individualData = {
       ...loanRequest,
-      loanInterest: loanRequest.loanInterest || 0,  // Ensure loanInterest is included
+      loanInterest: loanRequest.loanInterest || 0, // Ensure loanInterest is included
+      expectedAmountToBePaidBack: loanRequest.expectedAmountToBePaidBack, // Add expected amount to be paid back
       grandTotal,
       lastSavings,
       savingsFrequency,
       member: {
         ...loanRequest.member,
-        transactions, // Attach the transactions directly under the member object
+        transactions,
       },
     };
 
@@ -999,7 +1010,6 @@ app.get('/loan-requests', verifyFirebaseToken, async (req, res) => {
   console.log("Role:", role);
   console.log("Cooperative ID:", cooperativeId);
   console.log("Member ID:", memberId);
-
   try {
     let filter = {};
     if (role === 'cooperative-admin' && cooperativeId) {
@@ -1353,6 +1363,30 @@ app.put('/updateLoanAmount/:loanId', verifyFirebaseToken, async (req, res) => {
   }
 });
 
+// Endpoint to get total savings for all members
+app.get('/total-savings', verifyFirebaseToken, async (req, res) => {
+  try {
+    // Fetch all savings transactions for all members
+    const transactions = await prisma.memberSavings.findMany({
+      select: {
+        savingsDeposits: true,
+        withdrawals: true,
+      },
+    });
+
+    // Calculate the total savings across all members
+    const totalSavings = transactions.reduce(
+      (total, txn) => total + txn.savingsDeposits - (txn.withdrawals || 0),
+      0
+    );
+
+    res.status(200).json({ totalSavings });
+  } catch (error) {
+    console.error('Error fetching total savings:', error);
+    res.status(500).json({ error: 'Failed to fetch total savings', details: error.message });
+  }
+});
+
 
 // KYC submission route: /member-kyc
 
@@ -1652,54 +1686,31 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
 
     const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
-
     const cooperativeId = decodedToken.cooperativeId;
     const memberId = decodedToken.uid;
 
-    let transaction;
-    let totalLoansGranted = 0;
-
-    // Fetch the total amount of loans approved for the member
+    // Get the total amount of loans granted to the member
     const approvedLoans = await prisma.loansApproved.findMany({
       where: { memberId },
       select: { amountGranted: true },
     });
+    const totalLoansGranted = approvedLoans.reduce((total, loan) => total + loan.amountGranted, 0);
 
-    totalLoansGranted = approvedLoans.reduce((total, loan) => total + loan.amountGranted, 0);
-
-    if (cooperativeId && decodedToken.role === 'cooperative-admin') {
-      transaction = await prisma.memberSavings.findFirst({
-        where: { cooperativeId },
-        include: {
-          member: {
-            select: {
-              firstName: true,
-              surname: true,
-              email: true,
-              memberDetails: { select: { telephone1: true } },
-            },
+    // Fetch latest transaction (if cooperative-admin or member)
+    const transaction = await prisma.memberSavings.findFirst({
+      where: cooperativeId ? { cooperativeId } : { memberId },
+      include: {
+        member: {
+          select: {
+            firstName: true,
+            surname: true,
+            email: true,
+            memberDetails: { select: { telephone1: true } },
           },
         },
-        orderBy: { dateOfEntry: 'desc' },
-      });
-    } else if (memberId) {
-      transaction = await prisma.memberSavings.findFirst({
-        where: { memberId },
-        include: {
-          member: {
-            select: {
-              firstName: true,
-              surname: true,
-              email: true,
-              memberDetails: { select: { telephone1: true } },
-            },
-          },
-        },
-        orderBy: { dateOfEntry: 'desc' },
-      });
-    } else {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
+      },
+      orderBy: { dateOfEntry: 'desc' },
+    });
 
     if (!transaction) {
       return res.status(200).json({
@@ -1717,8 +1728,10 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
       });
     }
 
-    // Calculate grand total: user's total savings minus approved loans
-    const adjustedSavingsBalance = transaction.savingsBalance - totalLoansGranted;
+    // Adjust grand total and define the latest deposit
+    const latestDeposit = transaction.savingsDeposits;
+    const totalSavings = transaction.savingsBalance;
+    const grandTotal = totalSavings - totalLoansGranted;
 
     const flattenedTransaction = {
       ...transaction,
@@ -1726,8 +1739,10 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
       surname: transaction.member?.surname,
       email: transaction.member?.email,
       telephone: transaction.member?.memberDetails?.telephone1,
-      totalWithdrawals: totalLoansGranted, // Total loans granted
-      savingsBalance: adjustedSavingsBalance,
+      totalWithdrawals: totalLoansGranted,
+      savingsBalance: totalSavings,
+      savingsDeposits: latestDeposit,
+      grandTotal,
     };
 
     res.status(200).json(flattenedTransaction);

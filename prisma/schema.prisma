@@ -42,7 +42,7 @@ model CooperativeDetails{
      cooperativeName       String?  
        email                 String @unique  
   registrationNumber    String?
-  // img                   String? 
+  img                   String? 
   dateOfIncorporation   DateTime
   cooperative            Cooperative?  @relation(fields: [cooperativeId], references: [id])
   address               String
@@ -186,6 +186,7 @@ model LoansRequested {
   balanceOutstandingPrincipal Int?
   balanceOutstandingInterest  Int?
   balanceOutstandingTotal Int?
+  expectedAmountToBePaidBack  Int?
   approved              Boolean?
   rejected              Boolean?
   pending               Boolean?
