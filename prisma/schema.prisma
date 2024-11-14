@@ -226,6 +226,7 @@ model LoansApproved {
   balanceOutstandingPrincipal Int?
   balanceOutstandingInterest  Int?
   balanceOutstandingTotal Int?
+    expectedAmountToBePaidBack  Int?
   cooperativeId         String
 }
 
