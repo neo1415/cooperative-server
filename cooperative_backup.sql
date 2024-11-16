@@ -461,6 +461,7 @@ COPY public."Cooperative" (id, "cooperativeName", email, "createdAt") FROM stdin
 OJ3YoR9oPYc6Mg4okc8G5JJK0lk2	NEO	neowalker502@gmail.com	2024-10-18 04:17:49.578
 WtXAKB38NXhOGqZ0oEEvGAkOzE72	RYUJIN	adneo502@gmail.com	2024-10-18 04:20:12.479
 i8jsMWU6SdUiMztugxUlU7v5t7w2	NTSA	nemfeedback@gmail.com	2024-10-22 21:17:07.013
+Epae1Q3NQ1Q1O39Lz3hlz4fC3r03	cooperate	coor@coor.com	2024-11-09 11:25:24.685
 \.
 
 

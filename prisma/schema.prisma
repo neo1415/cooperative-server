@@ -32,6 +32,7 @@ model Cooperative {
   loansApproved         LoansApproved[] // One-to-many relation to LoansApproved
   debtors               Debtor[] 
   loanInterestSetting   LoanInterestSetting[]     // One-to-many relation to Debtor
+  cooperativeAdminSettings CooperativeAdminSettings[]
   roles                 Role[]         // One-to-many relation to Role
 
   createdAt             DateTime @default(now())
@@ -148,6 +149,20 @@ model LoanInterestSetting {
   minAmount        Int?
   maxAmount        Int?
   amountInterestRate Float?
+  createdAt        DateTime @default(now())
+}
+
+model CooperativeAdminSettings {
+  id               String   @id @default(uuid())
+  cooperative      Cooperative @relation(fields: [cooperativeId], references: [id])
+  cooperativeId    String
+  loanFormPrice Int?
+  shareCapital   Int?
+  entranceFee    Int?
+  loanUpperLimit Float?
+  monthsToLoan       Int?
+  // maxAmount        Int?
+  // amountInterestRate Float?
   createdAt        DateTime @default(now())
 }
 
