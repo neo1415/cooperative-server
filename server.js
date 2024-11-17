@@ -1241,6 +1241,35 @@ app.post('/loan-request/status',verifyFirebaseToken, async (req, res) => {
   }
 });
 
+
+app.post('/cooperative-admin-settings', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { cooperativeId } = req.user;
+    const adminSettings = req.body;
+
+    const savedAdminSettings = await Promise.all(
+      adminSettings.map(async (setting) => {
+        return await prisma.cooperativeAdminSettings.create({
+          data: {
+            cooperativeId,
+            loanFormPrice: setting.loanFormPrice,
+            shareCapital: setting.shareCapital,
+            entranceFee: setting.entranceFee,
+            loanUpperLimit: setting.loanUpperLimit,
+            monthsToLoan: setting.monthsToLoan,
+            // amountInterestRate: setting.amountInterestRate,
+          },
+        });
+      })
+    );
+
+    res.status(201).json(savedAdminSettings);
+  } catch (error) {
+    console.error("Error saving loan interest settings:", error);
+    res.status(500).json({ error: 'Failed to save loan interest settings' });
+  }
+});
+
 app.post('/loan-interest-settings', verifyFirebaseToken, async (req, res) => {
   try {
     const { cooperativeId } = req.user;
@@ -1269,6 +1298,22 @@ app.post('/loan-interest-settings', verifyFirebaseToken, async (req, res) => {
   }
 });
 
+app.put('/edit-cooperative-admin-setting/:id', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan } = req.body;
+
+    const updatedSetting = await prisma.cooperativeAdminSettings.update({
+      where: { id },
+      data: {loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan  },
+    });
+
+    res.status(200).json(updatedSetting);
+  } catch (error) {
+    console.error('Error updating loan interest setting:', error);
+    res.status(500).json({ error: 'Failed to update loan interest setting' });
+  }
+});
 
 // PUT: Update loan interest setting by ID
 app.put('/edit-loan-interest-setting/:id', verifyFirebaseToken, async (req, res) => {
@@ -1288,6 +1333,40 @@ app.put('/edit-loan-interest-setting/:id', verifyFirebaseToken, async (req, res)
   }
 });
 
+app.get('/fetch-cooperative-admin-settings', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { cooperativeId, role, memberId } = req.user;
+    console.log("Role:", role);
+    console.log("Cooperative ID:", cooperativeId);
+    if (role === 'member') {
+      console.log("Member ID:", memberId);
+    }
+
+    if (!cooperativeId) {
+      console.log("403 Unauthorized: Cooperative ID missing");
+      return res.status(403).json({ error: 'Unauthorized: Cooperative ID missing' });
+    }
+    if (!['cooperative-admin', 'member'].includes(role)) {
+      console.log("403 Unauthorized: Insufficient permissions");
+      return res.status(403).json({ error: 'Unauthorized: Insufficient permissions' });
+    }
+
+    const settings = await prisma.cooperativeAdminSettings.findMany({
+      where: { cooperativeId },
+    });
+
+    if (!settings.length) {
+      console.log("404 Not Found: No loan interest settings");
+      return res.status(404).json({ error: 'No loan interest settings found.' });
+    }
+
+    res.status(200).json(settings);
+    // console.log("Loan interest settings fetched:", settings);
+  } catch (error) {
+    console.error("Error fetching loan interest settings:", error);
+    res.status(500).json({ error: 'Failed to fetch loan interest settings' });
+  }
+});
 
 app.get('/fetch-loan-interest-settings', verifyFirebaseToken, async (req, res) => {
   try {
@@ -1324,6 +1403,16 @@ app.get('/fetch-loan-interest-settings', verifyFirebaseToken, async (req, res) =
   }
 });
 
+app.delete('/delete-cooperative-admin-setting/:id', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.cooperativeAdminSettings.delete({ where: { id } });
+    res.status(200).json({ message: 'Setting deleted successfully' });
+  } catch (error) {
+    console.error("Error deleting loan interest setting:", error);
+    res.status(500).json({ error: 'Failed to delete setting' });
+  }
+});
 
 app.delete('/delete-loan-interest-setting/:id', verifyFirebaseToken, async (req, res) => {
   try {
