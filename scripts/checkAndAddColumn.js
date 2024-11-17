@@ -2,9 +2,6 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-// scripts/checkAndAddColumn.js
-const { PrismaClient } = require('@prisma/client');
-
 async function ensureColumn() {
   try {
     await prisma.$executeRaw`ALTER TABLE "LoansRequested" ADD COLUMN IF NOT EXISTS "expectedAmountToBePaidBack" INTEGER;`;
