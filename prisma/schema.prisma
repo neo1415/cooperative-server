@@ -25,6 +25,7 @@ model Cooperative {
   id                    String   @id @default(uuid())
   cooperativeName       String   @unique
   email                 String   @unique
+  registrationNumber    String? @unique
   cooperativeDetails    CooperativeDetails[]
   members               Member[]      // One-to-many relation to members
   savings               MemberSavings[] // One-to-many relation to MemberSavings
@@ -42,7 +43,7 @@ model CooperativeDetails{
   cooperativeId          String    // Foreign key to Cooperative
      cooperativeName       String  
        email                 String @unique  
-  registrationNumber    String? @unique
+  // registrationNumber    String? @unique
   img                   String? 
   dateOfIncorporation   DateTime
   cooperative            Cooperative?  @relation(fields: [cooperativeId], references: [id])
@@ -78,6 +79,7 @@ model Member {
   cooperativeId     String?
   firstName         String
   email             String   @unique
+  registrationNumber    String? @unique
   cooperative       Cooperative? @relation(fields: [cooperativeId], references: [id])
   memberDetails     MembersDetails?  // One-to-one relation with MemberDetails (KYC)
   roles             Role[]          // One-to-many relation with Role
@@ -94,7 +96,7 @@ id                String   @id @default(uuid())
  cooperativeId     String?
 member            Member   @relation(fields: [memberId], references: [id]) // One-to-one relation
 memberId          String   @unique
-  registrationNumber    String?  @unique
+  // registrationNumber    String?  @unique
 bvn               String   @unique
 middleName        String
 dateOfEntry       DateTime @default(now())
