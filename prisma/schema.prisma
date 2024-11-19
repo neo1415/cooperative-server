@@ -40,9 +40,9 @@ model Cooperative {
 
 model CooperativeDetails{
   cooperativeId          String    // Foreign key to Cooperative
-     cooperativeName       String?  
+     cooperativeName       String  
        email                 String @unique  
-  registrationNumber    String?
+  registrationNumber    String? @unique
   img                   String? 
   dateOfIncorporation   DateTime
   cooperative            Cooperative?  @relation(fields: [cooperativeId], references: [id])
@@ -94,6 +94,7 @@ id                String   @id @default(uuid())
  cooperativeId     String?
 member            Member   @relation(fields: [memberId], references: [id]) // One-to-one relation
 memberId          String   @unique
+  registrationNumber    String?  @unique
 bvn               String   @unique
 middleName        String
 dateOfEntry       DateTime @default(now())
@@ -136,6 +137,7 @@ model MemberSavings {
   savingsBalance    Int
   totalWithdrawals   Int
   grandTotal        Int
+    type              String?   // "savings" or "contribution"
   savingsFrequency   Int      @default(0) // New field to track deposit frequency
 }
 

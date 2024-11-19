@@ -494,6 +494,11 @@ app.post('/login', async (req, res) => {
 // User registration route
 
 // Route for user registration
+const generateCooperativeRegistrationNumber = () => {
+  const randomString = Math.floor(100000 + Math.random() * 900000); // 6-digit random number
+  return `RG-${randomString}C`;
+};
+
 app.post('/register', async (req, res) => {
   const { email, cooperativeName, password } = req.body;
 
@@ -510,9 +515,8 @@ app.post('/register', async (req, res) => {
       displayName: cooperativeName,
     });
 
-    // Send verification email
-    const verificationLink = await admin.auth().generateEmailVerificationLink(email);
-    console.log('Verification link:', verificationLink);
+    // Generate registration number
+    const registrationNumber = generateCooperativeRegistrationNumber();
 
     // Set custom claims
     await admin.auth().setCustomUserClaims(userRecord.uid, {
@@ -520,12 +524,13 @@ app.post('/register', async (req, res) => {
       kycIncomplete: true,
     });
 
-    // Save cooperative data in Prisma with the Firebase user ID as cooperativeId
+    // Save cooperative data in Prisma with registration number
     const cooperative = await prisma.cooperative.create({
       data: {
         cooperativeName: cooperativeName,
         email: email,
-        id: userRecord.uid,  // Use the Firebase user ID as the cooperativeId
+        registrationNumber, // Save the registration number
+        id: userRecord.uid, // Use the Firebase user ID as the cooperativeId
       },
     });
 
@@ -534,13 +539,12 @@ app.post('/register', async (req, res) => {
       cooperativeId: userRecord.uid,
       cooperative,
     });
-
   } catch (error) {
     if (error.code === 'auth/email-already-exists') {
       // Handle Firebase duplicate email error
       return res.status(400).json({ error: 'The email address is already in use by another account.' });
     }
-    
+
     if (error.code === 'P2002' && error.meta && error.meta.target.includes('cooperativeName')) {
       // Handle Prisma unique constraint violation for cooperativeName
       return res.status(400).json({ error: 'The cooperative name is already in use. Please choose a different name.' });
@@ -553,105 +557,94 @@ app.post('/register', async (req, res) => {
 });
 
 
-// KYC submission route: /cooperative-kyc
-app.post('/cooperative-kyc',verifyFirebaseToken,upload.single('img'),async (req, res) => {
-    try {
-      // Extract cooperativeId and the rest of the KYC data from req.body
-      const { cooperativeId, ...cooperativeKycData } = req.body;
+app.post('/cooperative-kyc', verifyFirebaseToken, upload.single('img'), async (req, res) => {
+  try {
+    const { cooperativeId, ...cooperativeKycData } = req.body;
 
-      // Validate cooperativeId
-      if (typeof cooperativeId !== 'string' || !cooperativeId.trim()) {
-        console.error('cooperativeId should be a valid string');
-        return res
-          .status(400)
-          .json({ error: 'Invalid or missing cooperative ID format' });
-      }
-
-      console.log('Received CooperativeId:', cooperativeId);
-      console.log('Received KYC data:', cooperativeKycData);
-      console.log('Received image file:', req.file);
-
-      // Handle image upload if file exists
-      let imageUrl = null;
-      if (req.file) {
-        try {
-          console.log('Uploading image to Cloudinary...');
-          imageUrl = await uploadImageToCloudinary(req.file.buffer); // Correct usage here
-          console.log('Image uploaded successfully, URL:', imageUrl);
-        } catch (error) {
-          console.error('Error uploading image to Cloudinary:', error);
-          return res.status(500).json({ error: 'Failed to upload image' });
-        }
-      }
-
-      // Save cooperative KYC details in Prisma
-      const cooperativeDetails = await prisma.cooperativeDetails.create({
-        data: {
-          cooperative: {
-            connect: {
-              id: cooperativeId, // Correctly connect using cooperativeId
-            },
-          },
-          img: imageUrl || null,
-          cooperativeName: cooperativeKycData.cooperativeName,
-          email: cooperativeKycData.email,
-          registrationNumber: cooperativeKycData.registrationNumber,
-          dateOfIncorporation: new Date(
-            cooperativeKycData.dateOfIncorporation
-          ).toISOString(),
-          address: cooperativeKycData.address,
-          phoneNumber: cooperativeKycData.phoneNumber,
-          totalSavings:
-            parseFloat(cooperativeKycData.totalSavings) || 0,
-          totalDebt: parseFloat(cooperativeKycData.totalDebt) || 0,
-          totalLoansRequested:
-            parseFloat(cooperativeKycData.totalLoansRequested) || 0,
-          totalLoansApproved:
-            parseFloat(cooperativeKycData.totalLoansApproved) || 0,
-          totalMembers: cooperativeKycData.totalMembers || '',
-          totalDebtors: cooperativeKycData.totalDebtors || '',
-          totalProfit: parseFloat(cooperativeKycData.totalProfit) || 0,
-          directorName: cooperativeKycData.directorName,
-          directorPosition: cooperativeKycData.directorPosition,
-          directorEmail: cooperativeKycData.directorEmail,
-          directorPhoneNumber: cooperativeKycData.directorPhoneNumber,
-          directorDateOfBirth: new Date(
-            cooperativeKycData.directorDateOfBirth
-          ).toISOString(),
-          directorPlaceOfBirth: cooperativeKycData.directorPlaceOfBirth,
-          directorNationality: cooperativeKycData.directorNationality,
-          directorOccupation: cooperativeKycData.directorOccupation,
-          directorBVNNumber: cooperativeKycData.directorBVNNumber,
-          directorIDType: cooperativeKycData.directorIDType,
-          directorIDNumber: cooperativeKycData.directorIDNumber,
-          directorIssuedDate: cooperativeKycData.directorIssuedDate,
-          directorExpiryDate: cooperativeKycData.directorExpiryDate,
-          directorSourceOfIncome: cooperativeKycData.directorSourceOfIncome,
-        },
-      });
-
-      // Fetch the current custom claims for the user
-      const firebaseUser = await admin.auth().getUser(cooperativeId);
-      const currentClaims = firebaseUser.customClaims || {};
-
-      // Update custom claims, setting kycIncomplete to false
-      await admin.auth().setCustomUserClaims(firebaseUser.uid, {
-        ...currentClaims,
-        kycIncomplete: false,
-      });
-
-      res.status(200).json({
-        message: 'KYC completed successfully',
-        cooperativeDetails,
-      });
-    } catch (error) {
-      console.error('Error saving to Prisma:', error);
-      res.status(500).json({
-        error: 'Error saving to Prisma',
-        details: error.message,
-      });
+    // Validate cooperativeId
+    if (!cooperativeId || !cooperativeId.trim()) {
+      return res.status(400).json({ error: 'Invalid or missing cooperative ID' });
     }
-  });
+
+    // Fetch cooperative details
+    const cooperative = await prisma.cooperative.findUnique({
+      where: { id: cooperativeId },
+    });
+
+    if (!cooperative) {
+      return res.status(404).json({ error: 'Cooperative not found' });
+    }
+
+    const { cooperativeName, email, registrationNumber } = cooperative;
+
+    // Handle image upload if file exists
+    let imageUrl = null;
+    if (req.file) {
+      try {
+        imageUrl = await uploadImageToCloudinary(req.file.buffer);
+      } catch (error) {
+        return res.status(500).json({ error: 'Failed to upload image' });
+      }
+    }
+
+    // Save cooperative KYC details in Prisma
+    const cooperativeDetails = await prisma.cooperativeDetails.create({
+      data: {
+        cooperative: { connect: { id: cooperativeId } },
+        img: imageUrl || null,
+        cooperativeName,
+        email,
+        registrationNumber, // Use existing registration number
+        dateOfIncorporation: new Date(cooperativeKycData.dateOfIncorporation).toISOString(),
+        address: cooperativeKycData.address,
+        phoneNumber: cooperativeKycData.phoneNumber,
+        totalSavings: parseFloat(cooperativeKycData.totalSavings) || 0,
+        totalDebt: parseFloat(cooperativeKycData.totalDebt) || 0,
+        totalLoansRequested: parseFloat(cooperativeKycData.totalLoansRequested) || 0,
+        totalLoansApproved: parseFloat(cooperativeKycData.totalLoansApproved) || 0,
+        totalMembers: cooperativeKycData.totalMembers || '',
+        totalDebtors: cooperativeKycData.totalDebtors || '',
+        totalProfit: parseFloat(cooperativeKycData.totalProfit) || 0,
+        directorName: cooperativeKycData.directorName,
+        directorPosition: cooperativeKycData.directorPosition,
+        directorEmail: cooperativeKycData.directorEmail,
+        directorPhoneNumber: cooperativeKycData.directorPhoneNumber,
+        directorDateOfBirth: new Date(cooperativeKycData.directorDateOfBirth).toISOString(),
+        directorPlaceOfBirth: cooperativeKycData.directorPlaceOfBirth,
+        directorNationality: cooperativeKycData.directorNationality,
+        directorOccupation: cooperativeKycData.directorOccupation,
+        directorBVNNumber: cooperativeKycData.directorBVNNumber,
+        directorIDType: cooperativeKycData.directorIDType,
+        directorIDNumber: cooperativeKycData.directorIDNumber,
+        directorIssuedDate: cooperativeKycData.directorIssuedDate,
+        directorExpiryDate: cooperativeKycData.directorExpiryDate,
+        directorSourceOfIncome: cooperativeKycData.directorSourceOfIncome,
+      },
+    });
+
+    // Update Firebase claims
+    const firebaseUser = await admin.auth().getUser(cooperativeId);
+    const currentClaims = firebaseUser.customClaims || {};
+
+    await admin.auth().setCustomUserClaims(firebaseUser.uid, {
+      ...currentClaims,
+      kycIncomplete: false,
+    });
+
+    res.status(200).json({
+      message: 'KYC completed successfully',
+      cooperativeDetails,
+    });
+  } catch (error) {
+    console.error('Error saving to Prisma:', error);
+    res.status(500).json({
+      error: 'Error saving to Prisma',
+      details: error.message,
+    });
+  }
+});
+
+
 app.get('/cooperatives', async (req, res) => {
   try {
     const cooperatives = await prisma.cooperative.findMany({
@@ -759,6 +752,9 @@ app.post('/register-member', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // Generate a unique registration number
+    const registrationNumber = `RG${Date.now()}${Math.random().toString().slice(2, 10)}M`;
+
     // Create Firebase user
     const userRecord = await admin.auth().createUser({
       email: email,
@@ -779,16 +775,17 @@ app.post('/register-member', async (req, res) => {
         surname,
         email,
         cooperativeId,
+        registrationNumber, // Save the generated registration number
         id: userRecord.uid, // Use Firebase user ID as member ID
       },
     });
 
     res.status(201).json({
       message: 'Member registered successfully',
-      member,
       memberId: userRecord.uid,
+      member,
+      registrationNumber,
     });
-
   } catch (error) {
     if (error.code === 'auth/email-already-exists') {
       res.status(400).json({ error: 'The email address is already in use.' });
@@ -796,6 +793,93 @@ app.post('/register-member', async (req, res) => {
       console.error('Error during member registration:', error);
       res.status(500).json({ error: 'Failed to register member', details: error.message });
     }
+  }
+});
+
+
+// KYC submission route: /member-kyc
+
+app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, res) => {
+  const memberId = req.body.memberId;
+  const memberKycData = req.body;
+
+  console.log("Received memberId:", memberId);
+  console.log("Received KYC data:", memberKycData);
+  console.log("Received image file:", req.file);
+
+  if (!memberId || Object.keys(memberKycData).length === 0) {
+    return res.status(400).json({ error: "Member ID or KYC data is missing." });
+  }
+
+  let imageUrl = null;
+  if (req.file) {
+    try {
+      console.log("Uploading image to Cloudinary...");
+      imageUrl = await uploadImageToCloudinary(req.file.buffer);
+    } catch (error) {
+      console.error("Error uploading image to Cloudinary:", error);
+      return res.status(500).json({ error: "Failed to upload image" });
+    }
+  }
+
+  try {
+    // Fetch the member's registration number
+    const member = await prisma.member.findUnique({
+      where: { id: memberId },
+      select: { registrationNumber: true },
+    });
+
+    if (!member) {
+      return res.status(404).json({ error: "Member not found" });
+    }
+
+    const membersDetails = await prisma.membersDetails.create({
+      data: {
+        member: { connect: { id: memberId } },
+        registrationNumber: member.registrationNumber, // Use the fetched registration number
+        img: imageUrl || null,
+        middleName: memberKycData.middleName,
+        dateOfEntry: new Date(memberKycData.dateOfEntry).toISOString(),
+        telephone1: memberKycData.telephone1,
+        telephone2: memberKycData.telephone2,
+        bvn: memberKycData.bvn,
+        dateOfBirth: new Date(memberKycData.dateOfBirth).toISOString(),
+        sex: memberKycData.sex,
+        maritalStatus: memberKycData.maritalStatus,
+        occupation: memberKycData.occupation,
+        business: memberKycData.business,
+        residentialAddress: memberKycData.residentialAddress,
+        lga: memberKycData.lga,
+        state: memberKycData.state,
+        permanentHomeAddress: memberKycData.permanentHomeAddress,
+        stateOfOrigin: memberKycData.stateOfOrigin,
+        lga2: memberKycData.lga2,
+        amountPaid: memberKycData.amountPaid,
+        accountNumber: memberKycData.accountNumber,
+        bankName: memberKycData.bankName,
+        nextOfKinName: memberKycData.nextOfKinName,
+        nextOfKinPhone: memberKycData.nextOfKinPhone,
+        nextOfKinPhone2: memberKycData.nextOfKinPhone2,
+        sponsor: memberKycData.sponsor,
+      },
+    });
+
+    // Update Firebase custom claims
+    const firebaseUser = await admin.auth().getUser(memberId);
+    const currentClaims = firebaseUser.customClaims || {};
+
+    await admin.auth().setCustomUserClaims(firebaseUser.uid, {
+      ...currentClaims,
+      kycCompleted: true,
+    });
+
+    res.status(200).json({
+      message: "KYC completed successfully",
+      membersDetails,
+    });
+  } catch (error) {
+    console.error("Error processing KYC:", error);
+    res.status(500).json({ error: "Error during KYC processing", details: error.message });
   }
 });
 
@@ -888,6 +972,7 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
       loanInterest,
     } = req.body;
 
+    // Authorization checks
     if (role !== 'member' && role !== 'cooperative-admin') {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -895,13 +980,27 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // Parse request body values
     const parsedAmountRequired = parseInt(amountRequired, 10);
     const parsedDurationOfLoan = parseInt(durationOfLoan, 10);
     const formattedLoanInterest = parseFloat(loanInterest.toFixed(2));
 
-    const interestAmount = parsedAmountRequired * (formattedLoanInterest / 100) * (parsedDurationOfLoan / 12);
-    const expectedAmountToBePaidBack = parsedAmountRequired + interestAmount;
+    // Fetch admin settings for the cooperative
+    const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
+      where: { cooperativeId },
+    });
 
+    if (!adminSettings) {
+      return res.status(404).json({ error: 'No admin settings found for this cooperative.' });
+    }
+
+    const loanFormPrice = adminSettings.loanFormPrice ?? 0; // Default to 0 if loanFormPrice is null/undefined
+
+    // Calculate the expected amount to be paid back
+    const interestAmount = parsedAmountRequired * (formattedLoanInterest / 100) * (parsedDurationOfLoan / 12);
+    const expectedAmountToBePaidBack = parsedAmountRequired + interestAmount + loanFormPrice;
+
+    // Calculate the reimbursement date
     const reimbursementDate = new Date();
     reimbursementDate.setMonth(reimbursementDate.getMonth() + parsedDurationOfLoan);
     const formattedReimbursementDate = formatDate(reimbursementDate);
@@ -909,6 +1008,7 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
     const dateOfApplication = new Date();
     const formattedDateOfApplication = formatDate(dateOfApplication);
 
+    // Save loan request to the database
     const loansRequested = await prisma.loansRequested.create({
       data: {
         cooperative: { connect: { id: cooperativeId } },
@@ -1083,7 +1183,7 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
       rejectedLoans,
       pendingLoans,
       totalRequestedAmount: totalRequestedAmount._sum.amountRequired || 0,
-      totalGrantedAmount: totalGrantedAmount._sum.amountGranted || 0
+      totalGrantedAmount: totalGrantedAmount._sum.expectedAmountToBePaidBack || 0
     });
 
     res.status(200).json({
@@ -1092,7 +1192,7 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
       rejectedLoans,
       pendingLoans,
       totalRequestedAmount: totalRequestedAmount._sum.amountRequired || 0,
-      totalGrantedAmount: totalGrantedAmount._sum.amountGranted || 0
+      totalGrantedAmount: totalGrantedAmount._sum.expectedAmountToBePaidBack || 0
     });
   } catch (error) {
     console.error('Error fetching loan statistics:', error);
@@ -1209,6 +1309,7 @@ app.post('/loan-request/status',verifyFirebaseToken, async (req, res) => {
           surety2telePhone: loan.surety2telePhone,
           amountGranted: loan.amountGranted,
           loanInterest: loan.loanInterest,
+          expectedAmountToBePaidBack: loan.expectedAmountToBePaidBack,
           expectedReimbursementDate: loan.expectedReimbursementDate,
           balanceInTheSavingsAccount: loan.balanceInTheSavingsAccount,
           surety1balanceInTheSavingsAccount: loan.surety1balanceInTheSavingsAccount,
@@ -1430,29 +1531,65 @@ app.delete('/delete-loan-interest-setting/:id', verifyFirebaseToken, async (req,
 
 
 
-// Ensure the route path starts with `/`
 app.put('/updateLoanAmount/:loanId', verifyFirebaseToken, async (req, res) => {
   const { loanId } = req.params; // This is the loanId from the URL
   const { amountGranted } = req.body;
 
-  // Validate the amountRequired
+  // Validate the amountGranted
   if (typeof amountGranted !== 'number' || amountGranted <= 0) {
     return res.status(400).json({ error: 'Invalid loan amount provided' });
   }
 
   try {
-    // Update the loan amount in the Prisma database using `id` instead of `loanId`
-    const updatedLoan = await prisma.loansRequested.update({
-      where: { id: loanId }, // Use `id` field for lookup
-      data: { amountGranted },
+    // Fetch the loan request to retrieve related data
+    const loanRequest = await prisma.loansRequested.findUnique({
+      where: { id: loanId },
+      include: {
+        cooperative: true, // To fetch cooperativeId
+      },
     });
 
-    res.json({ message: 'Loan amount updated successfully', loan: updatedLoan });
+    if (!loanRequest) {
+      return res.status(404).json({ error: 'Loan request not found' });
+    }
+
+    const { cooperativeId, durationOfLoan, loanInterest } = loanRequest;
+
+    // Fetch the cooperative admin settings for the loanFormPrice
+    const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
+      where: { cooperativeId },
+    });
+
+    if (!adminSettings) {
+      return res.status(404).json({ error: 'Admin settings for this cooperative not found' });
+    }
+
+    const loanFormPrice = adminSettings.loanFormPrice ?? 0;
+
+    // Recalculate the expected amount to be paid back
+    const interestAmount =
+      amountGranted * (loanInterest / 100) * (durationOfLoan / 12);
+    const expectedAmountToBePaidBack = amountGranted + interestAmount + loanFormPrice;
+
+    // Update the loan amount and the recalculated expected amount to be paid back
+    const updatedLoan = await prisma.loansRequested.update({
+      where: { id: loanId },
+      data: {
+        amountGranted,
+        expectedAmountToBePaidBack: parseFloat(expectedAmountToBePaidBack.toFixed(2)),
+      },
+    });
+
+    res.json({
+      message: 'Loan amount and expected repayment updated successfully',
+      loan: updatedLoan,
+    });
   } catch (error) {
-    console.error('Error updating loan amount:', error);
-    res.status(500).json({ error: 'Failed to update loan amount' });
+    console.error('Error updating loan amount and repayment:', error);
+    res.status(500).json({ error: 'Failed to update loan amount and repayment' });
   }
 });
+
 
 // Endpoint to get total savings for all members
 app.get('/total-savings', verifyFirebaseToken, async (req, res) => {
@@ -1478,85 +1615,6 @@ app.get('/total-savings', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-
-// KYC submission route: /member-kyc
-
-app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, res) => {
-  const memberId = req.body.memberId;
-  const memberKycData = req.body;
-
-  console.log("Received memberId:", memberId);
-  console.log("Received KYC data:", memberKycData);
-  console.log("Received image file:", req.file);
-
-  if (!memberId || Object.keys(memberKycData).length === 0) {
-    console.log("Bad Request: Member ID or KYC data is missing");
-    return res.status(400).json({ error: "Member ID or KYC data is missing." });
-  }
-
-  let imageUrl = null;
-  if (req.file) {
-    try {
-      console.log("Uploading image to Cloudinary...");
-      imageUrl = await uploadImageToCloudinary(req.file.buffer);  // Correct usage here
-      console.log("Image uploaded successfully, URL:", imageUrl);
-    } catch (error) {
-      console.error("Error uploading image to Cloudinary:", error);
-      return res.status(500).json({ error: "Failed to upload image" });
-    }
-  }
-
-try {
-  const membersDetails = await prisma.membersDetails.create({
-    data: {
-      member: { connect: { id: memberId } }, // Connects the member relation
-      img: imageUrl || null, // Use the image URL or null
-      middleName: memberKycData.middleName,
-      dateOfEntry: new Date(memberKycData.dateOfEntry).toISOString(), // Convert to string
-      telephone1: memberKycData.telephone1,
-      telephone2: memberKycData.telephone2,
-      bvn: memberKycData.bvn,
-      dateOfBirth: new Date(memberKycData.dateOfBirth).toISOString(), // Convert to string
-      sex: memberKycData.sex,
-      maritalStatus: memberKycData.maritalStatus,
-      occupation: memberKycData.occupation,
-      business: memberKycData.business,
-      residentialAddress: memberKycData.residentialAddress,
-      lga: memberKycData.lga,
-      state: memberKycData.state,
-      permanentHomeAddress: memberKycData.permanentHomeAddress,
-      stateOfOrigin: memberKycData.stateOfOrigin,
-      lga2: memberKycData.lga2,
-      amountPaid: memberKycData.amountPaid,
-      accountNumber: memberKycData.accountNumber,
-      bankName: memberKycData.bankName,
-      nextOfKinName: memberKycData.nextOfKinName,
-      nextOfKinPhone: memberKycData.nextOfKinPhone,
-      nextOfKinPhone2: memberKycData.nextOfKinPhone2,
-      sponsor: memberKycData.sponsor,
-    },
-  });
-
-  console.log("KYC details saved successfully:", membersDetails);
-
-  const firebaseUser = await admin.auth().getUser(memberId);
-  const currentClaims = firebaseUser.customClaims || {};
-
-  console.log("Setting custom claims for user...");
-  await admin.auth().setCustomUserClaims(firebaseUser.uid, {
-    ...currentClaims,
-    kycCompleted: true,
-  });
-
-  res.status(200).json({
-    message: "KYC completed successfully",
-    membersDetails,
-  });
-} catch (error) {
-  console.error("Error processing KYC:", error);
-  res.status(500).json({ error: "Error during KYC processing", details: error.message });
-}
-});
 
 // Route to get specific member profile data
 app.get('/member/profileSettings', verifyFirebaseToken, async (req, res) => {
@@ -1632,18 +1690,20 @@ app.get('/members',verifyFirebaseToken, async (req, res) => {
 
 
 // app.post('/member/savings') - Route for handling savings deposits
-app.post('/member/savings',verifyFirebaseToken, async (req, res) => {
+app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, type } = req.body;
 
-    // Validate amount
+    // Validate amount and type
     if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
       return res.status(400).json({ error: 'Invalid deposit amount' });
+    }
+    if (!['savings', 'contribution'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid deposit type' });
     }
 
     const authHeader = req.headers.authorization;
     const memberId = await getMemberIdFromAuth(authHeader);
-
     const member = await findMemberById(memberId);
 
     const lastSavingsRecord = await prisma.memberSavings.findFirst({
@@ -1670,19 +1730,129 @@ app.post('/member/savings',verifyFirebaseToken, async (req, res) => {
         savingsBalance: newBalance,
         totalWithdrawals,
         grandTotal,
-        savingsFrequency, // Track deposit frequency
+        savingsFrequency,
+        type, // Track deposit type as either "savings" or "contribution"
       },
     });
 
     res.status(200).json(savingsDeposit);
-    console.log(savingsDeposit);
-    console.log(savingsDeposit.data);
-    console.log("success")
   } catch (error) {
     console.error('Error processing savings deposit:', error);
     res.status(500).json({ error: 'Failed to process savings deposit' });
   }
 });
+
+// File path: /routes/memberSavingsStats.js
+
+app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const memberId = await getMemberIdFromAuth(authHeader);
+
+    // Correctly fetch cooperative settings
+    const cooperative = await prisma.member.findUnique({
+      where: { id: memberId },
+      select: { cooperativeId: true },
+    });
+
+    if (!cooperative) {
+      return res.status(404).json({ error: 'Cooperative not found for member' });
+    }
+
+    const cooperativeId = cooperative.cooperativeId;
+    const monthsToLoanSetting = await prisma. cooperativeAdminSettings.findFirst({
+      where: { cooperativeId },
+      select: { monthsToLoan: true },
+    });
+
+    const monthsToLoan = monthsToLoanSetting?.monthsToLoan || 0;
+
+    // Fetch all memberSavings records
+    const allRecords = await prisma.memberSavings.findMany({ where: { memberId } });
+    const savingsRecords = allRecords.filter(record => record.type === 'savings');
+    const contributionRecords = allRecords.filter(record => record.type === 'contribution');
+
+    // Helper functions
+    const calculateTotalAmount = (records) => records.reduce((sum, r) => sum + r.savingsDeposits, 0);
+
+    const calculateMonthlyStats = (records) => {
+      const stats = {};
+      records.forEach((record) => {
+        const month = record.dateOfEntry.toISOString().slice(0, 7); // "YYYY-MM"
+        if (!stats[month]) stats[month] = { count: 0, total: 0 };
+        stats[month].count += 1;
+        stats[month].total += record.savingsDeposits;
+      });
+      return stats;
+    };
+
+    const calculateYearlyStats = (records) => {
+      const stats = {};
+      records.forEach((record) => {
+        const year = record.dateOfEntry.toISOString().slice(0, 4); // "YYYY"
+        if (!stats[year]) stats[year] = { count: 0, total: 0 };
+        stats[year].count += 1;
+        stats[year].total += record.savingsDeposits;
+      });
+      return stats;
+    };
+
+    // Calculate stats
+    const savingsStats = {
+      totalAmount: calculateTotalAmount(savingsRecords),
+      totalCount: savingsRecords.length,
+      monthly: calculateMonthlyStats(savingsRecords),
+      yearly: calculateYearlyStats(savingsRecords),
+    };
+
+    const contributionStats = {
+      totalAmount: calculateTotalAmount(contributionRecords),
+      totalCount: contributionRecords.length,
+      monthly: calculateMonthlyStats(contributionRecords),
+      yearly: calculateYearlyStats(contributionRecords),
+    };
+
+    const overallStats = {
+      totalAmount: calculateTotalAmount(allRecords),
+      totalCount: allRecords.length,
+      monthly: calculateMonthlyStats(allRecords),
+      yearly: calculateYearlyStats(allRecords),
+    };
+
+    // Check loan eligibility
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const eligibleMonths = Object.keys(contributionStats.monthly)
+      .slice(-monthsToLoan)
+      .sort();
+
+    const isEligibleForLoan =
+      eligibleMonths.length === monthsToLoan &&
+      eligibleMonths.every((month, index) => {
+        const expectedMonth = new Date();
+        expectedMonth.setMonth(expectedMonth.getMonth() - (monthsToLoan - index - 1));
+        return month === expectedMonth.toISOString().slice(0, 7);
+      });
+
+    const response = {
+      savings: savingsStats,
+      contributions: contributionStats,
+      overall: overallStats,
+      eligibility: isEligibleForLoan ? 'Eligible for Loan' : 'Not Eligible for Loan',
+      eligibilityExplanation: isEligibleForLoan
+        ? `Member has made contributions for ${monthsToLoan} consecutive months.`
+        : `Member needs to contribute for ${monthsToLoan} consecutive months to be eligible.`,
+    };
+
+    // Log detailed stats to the console for monitoring
+    console.log('Detailed Member Savings and Contributions Stats:', JSON.stringify(response, null, 2));
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error('Error fetching member savings stats:', error);
+    res.status(500).json({ error: 'Failed to fetch member savings stats' });
+  }
+});
+
 
 // Updated Route to Fetch Transactions for Member or Cooperative
 app.get('/transactions', verifyFirebaseToken, async (req, res) => {
