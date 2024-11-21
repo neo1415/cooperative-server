@@ -986,7 +986,7 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
     const formattedLoanInterest = parseFloat(loanInterest.toFixed(2));
 
     // Fetch admin settings for the cooperative
-    const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
+    const adminSettings = await prisma.cooperativeettings.findFirst({
       where: { cooperativeId },
     });
 
@@ -1003,10 +1003,11 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
     // Calculate the reimbursement date
     const reimbursementDate = new Date();
     reimbursementDate.setMonth(reimbursementDate.getMonth() + parsedDurationOfLoan);
-    const formattedReimbursementDate = formatDate(reimbursementDate);
+    const formattedReimbursementDate = reimbursementDate.toISOString(); // Ensure ISO-8601 format
 
+    // Current application date
     const dateOfApplication = new Date();
-    const formattedDateOfApplication = formatDate(dateOfApplication);
+    const formattedDateOfApplication = dateOfApplication.toISOString(); // Ensure ISO-8601 format
 
     // Save loan request to the database
     const loansRequested = await prisma.loansRequested.create({
@@ -1151,55 +1152,113 @@ app.get('/loan-requests', verifyFirebaseToken, async (req, res) => {
 app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
   try {
     const { role, memberId, cooperativeId } = req.user;
-    console.log('User role:', role);
-    console.log('User memberId:', memberId);
-    console.log('User cooperativeId:', cooperativeId);
+
+    console.log('Request received for loan stats');
+    console.log('User Role:', role);
+    console.log('Member ID:', memberId);
+    console.log('Cooperative ID:', cooperativeId);
 
     let filter = {};
-
     if (role === 'cooperative-admin' && cooperativeId) {
       filter.cooperativeId = cooperativeId;
     } else if (role === 'member' && memberId) {
       filter.memberId = memberId;
     } else {
-      console.warn('Unauthorized access attempt:', req.user);
+      console.warn('Unauthorized access attempt');
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    console.log('Filter applied to loan stats query:', filter);
+    console.log('Filter applied:', filter);
 
-    const [totalLoans, approvedLoans, rejectedLoans, pendingLoans, totalRequestedAmount, totalGrantedAmount] = await Promise.all([
-      prisma.loansRequested.count({ where: filter }),
-      prisma.loansRequested.count({ where: { ...filter, approved: true } }),
-      prisma.loansRequested.count({ where: { ...filter, rejected: true } }),
-      prisma.loansRequested.count({ where: { ...filter, pending: true } }),
-      prisma.loansRequested.aggregate({ where: filter, _sum: { amountRequired: true } }),
-      prisma.loansRequested.aggregate({ where: { ...filter, approved: true }, _sum: { amountGranted: true } })
-    ]);
-
-    console.log('Loan Stats Results:', {
-      totalLoans,
-      approvedLoans,
-      rejectedLoans,
-      pendingLoans,
-      totalRequestedAmount: totalRequestedAmount._sum.amountRequired || 0,
-      totalGrantedAmount: totalGrantedAmount._sum.expectedAmountToBePaidBack || 0
+    // Fetch loans
+    const allLoans = await prisma.loansRequested.findMany({
+      where: filter,
+      include: { member: { select: { firstName: true, surname: true, email: true } } },
     });
 
-    res.status(200).json({
+    console.log('All Loans Fetched:', allLoans);
+
+    // Helper functions for calculations
+    const calculateTotalAmount = (records, field) =>
+      records.reduce((sum, record) => sum + (record[field] || 0), 0);
+
+    const calculateMonthlyStats = (records) => {
+      const stats = {};
+      records.forEach((record) => {
+        const month = record.dateOfApplication.toISOString().slice(0, 7); // "YYYY-MM"
+        if (!stats[month]) stats[month] = { count: 0, total: 0 };
+        stats[month].count += 1;
+        stats[month].total += record.amountGranted || 0;
+      });
+      return stats;
+    };
+
+    const calculateYearlyStats = (records) => {
+      const stats = {};
+      records.forEach((record) => {
+        const year = record.dateOfApplication.toISOString().slice(0, 4); // "YYYY"
+        if (!stats[year]) stats[year] = { count: 0, total: 0 };
+        stats[year].count += 1;
+        stats[year].total += record.amountGranted || 0;
+      });
+      return stats;
+    };
+
+    // Calculate stats
+    const monthlyStats = calculateMonthlyStats(allLoans);
+    const yearlyStats = calculateYearlyStats(allLoans);
+    const totalAmountRequested = calculateTotalAmount(allLoans, 'amountRequired');
+    const totalAmountGranted = calculateTotalAmount(allLoans, 'amountGranted');
+    const totalLoans = allLoans.length;
+
+    // Defaulter logic
+    const now = new Date();
+    const defaulters = [];
+    for (const loan of allLoans) {
+      if (new Date(loan.expectedReimbursementDate) < now && !loan.repaid) {
+        const savingsDuringLoanPeriod = await prisma.memberSavings.findMany({
+          where: {
+            memberId: loan.memberId,
+            dateOfEntry: {
+              gte: new Date(loan.dateOfApplication),
+              lte: new Date(loan.expectedReimbursementDate),
+            },
+          },
+        });
+
+        const totalSavings = calculateTotalAmount(savingsDuringLoanPeriod, 'savingsDeposits');
+        if (totalSavings < loan.expectedAmountToBePaidBack) {
+          defaulters.push({
+            memberId: loan.memberId,
+            loanId: loan.id,
+            expectedAmountToBePaidBack: loan.expectedAmountToBePaidBack,
+            totalSavings,
+          });
+
+          console.warn(`Defaulter detected: Member ${loan.memberId}, Loan ${loan.id}`);
+          await admin.auth().setCustomUserClaims(loan.memberId, { debtor: true });
+        }
+      }
+    }
+
+    // Consolidated loan stats
+    const loanStats = {
+      totalAmountRequested,
+      totalAmountGranted,
       totalLoans,
-      approvedLoans,
-      rejectedLoans,
-      pendingLoans,
-      totalRequestedAmount: totalRequestedAmount._sum.amountRequired || 0,
-      totalGrantedAmount: totalGrantedAmount._sum.expectedAmountToBePaidBack || 0
-    });
+      monthly: monthlyStats,
+      yearly: yearlyStats,
+      defaulters,
+    };
+
+    console.log('Final Loan Stats:', JSON.stringify(loanStats, null, 2));
+
+    res.status(200).json({ stats: loanStats, loans: allLoans });
   } catch (error) {
     console.error('Error fetching loan statistics:', error);
     res.status(500).json({ error: 'Failed to fetch loan statistics', details: error.message });
   }
 });
-
 
 app.post('/loan-requests/:loanId/approve-reject',verifyFirebaseToken, async (req, res) => {
   try {
@@ -1352,7 +1411,7 @@ app.post('/cooperative-admin-settings', verifyFirebaseToken, async (req, res) =>
 
     const savedAdminSettings = await Promise.all(
       adminSettings.map(async (setting) => {
-        return await prisma.cooperativeAdminSettings.create({
+        return await prisma.cooperativeettings.create({
           data: {
             cooperativeId,
             loanFormPrice: setting.loanFormPrice,
@@ -1360,7 +1419,7 @@ app.post('/cooperative-admin-settings', verifyFirebaseToken, async (req, res) =>
             entranceFee: setting.entranceFee,
             loanUpperLimit: setting.loanUpperLimit,
             monthsToLoan: setting.monthsToLoan,
-            // amountInterestRate: setting.amountInterestRate,
+            gracePeriod: setting.gracePeriod,
           },
         });
       })
@@ -1404,11 +1463,11 @@ app.post('/loan-interest-settings', verifyFirebaseToken, async (req, res) => {
 app.put('/edit-cooperative-admin-setting/:id', verifyFirebaseToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan } = req.body;
+    const { loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan, gracePeriod } = req.body;
 
-    const updatedSetting = await prisma.cooperativeAdminSettings.update({
+    const updatedSetting = await prisma.cooperativeettings.update({
       where: { id },
-      data: {loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan  },
+      data: {loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan ,gracePeriod },
     });
 
     res.status(200).json(updatedSetting);
@@ -1742,114 +1801,160 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
   }
 });
 
+const userId = 'UCKromrtmSPVIiFf1dodzZH0v2F3';
+
+// Function to add the custom claim
+const addCustomClaim = async () => {
+  try {
+    // Get the user record
+    const userRecord = await admin.auth().getUser(userId);
+    console.log('Current Custom Claims:', userRecord.customClaims);
+
+    // Add or update the 'role: member' claim and 'kycCompleted' claim
+    await admin.auth().setCustomUserClaims(userRecord.uid, {
+      ...userRecord.customClaims, // Preserve existing claims
+      role: 'member',            // Add or update the 'role' claim
+      kycCompleted: true,        // Set KYC to true
+    });
+
+    console.log(`Custom claims updated for user with ID: ${userId}`);
+  } catch (error) {
+    console.error('Error adding custom claim:', error.message);
+  }
+};
+
+// Call the function when the app starts
+addCustomClaim();
+
 // File path: /routes/memberSavingsStats.js
 
+// File: /server/routes/memberStats.js
 app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
-    const memberId = await getMemberIdFromAuth(authHeader);
+    if (!authHeader) {
+      console.error('Authorization header is missing.');
+      return res.status(401).json({ error: 'Authorization header missing' });
+    }
 
-    // Correctly fetch cooperative settings
+    const memberId = await getMemberIdFromAuth(authHeader);
+    if (!memberId) {
+      console.error('Invalid token or user not found.');
+      return res.status(403).json({ error: 'Invalid token or user not found' });
+    }
+
+    console.log('Fetching savings stats for member:', memberId);
+
+    // Fetch cooperative details for the member
     const cooperative = await prisma.member.findUnique({
       where: { id: memberId },
       select: { cooperativeId: true },
     });
 
-    if (!cooperative) {
+    if (!cooperative?.cooperativeId) {
+      console.error(`Cooperative not found for member: ${memberId}`);
       return res.status(404).json({ error: 'Cooperative not found for member' });
     }
 
     const cooperativeId = cooperative.cooperativeId;
-    const monthsToLoanSetting = await prisma. cooperativeAdminSettings.findFirst({
-      where: { cooperativeId },
-      select: { monthsToLoan: true },
+    console.log(`Member belongs to cooperative: ${cooperativeId}`);
+
+    // Determine if the user is a cooperative admin
+    const isCooperativeAdmin = await prisma.member.findFirst({
+      where: {
+        id: memberId,
+        roles: { some: { name: 'Cooperative Admin' } },
+      },
     });
 
-    const monthsToLoan = monthsToLoanSetting?.monthsToLoan || 0;
+    console.log(
+      `Requester (${memberId}) is ${
+        isCooperativeAdmin ? 'a cooperative admin' : 'a regular member'
+      }.`
+    );
 
-    // Fetch all memberSavings records
-    const allRecords = await prisma.memberSavings.findMany({ where: { memberId } });
-    const savingsRecords = allRecords.filter(record => record.type === 'savings');
-    const contributionRecords = allRecords.filter(record => record.type === 'contribution');
+    let allSavings = [];
+    let allLoans = [];
 
-    // Helper functions
-    const calculateTotalAmount = (records) => records.reduce((sum, r) => sum + r.savingsDeposits, 0);
-
-    const calculateMonthlyStats = (records) => {
-      const stats = {};
-      records.forEach((record) => {
-        const month = record.dateOfEntry.toISOString().slice(0, 7); // "YYYY-MM"
-        if (!stats[month]) stats[month] = { count: 0, total: 0 };
-        stats[month].count += 1;
-        stats[month].total += record.savingsDeposits;
-      });
-      return stats;
-    };
-
-    const calculateYearlyStats = (records) => {
-      const stats = {};
-      records.forEach((record) => {
-        const year = record.dateOfEntry.toISOString().slice(0, 4); // "YYYY"
-        if (!stats[year]) stats[year] = { count: 0, total: 0 };
-        stats[year].count += 1;
-        stats[year].total += record.savingsDeposits;
-      });
-      return stats;
-    };
-
-    // Calculate stats
-    const savingsStats = {
-      totalAmount: calculateTotalAmount(savingsRecords),
-      totalCount: savingsRecords.length,
-      monthly: calculateMonthlyStats(savingsRecords),
-      yearly: calculateYearlyStats(savingsRecords),
-    };
-
-    const contributionStats = {
-      totalAmount: calculateTotalAmount(contributionRecords),
-      totalCount: contributionRecords.length,
-      monthly: calculateMonthlyStats(contributionRecords),
-      yearly: calculateYearlyStats(contributionRecords),
-    };
-
-    const overallStats = {
-      totalAmount: calculateTotalAmount(allRecords),
-      totalCount: allRecords.length,
-      monthly: calculateMonthlyStats(allRecords),
-      yearly: calculateYearlyStats(allRecords),
-    };
-
-    // Check loan eligibility
-    const currentMonth = new Date().toISOString().slice(0, 7);
-    const eligibleMonths = Object.keys(contributionStats.monthly)
-      .slice(-monthsToLoan)
-      .sort();
-
-    const isEligibleForLoan =
-      eligibleMonths.length === monthsToLoan &&
-      eligibleMonths.every((month, index) => {
-        const expectedMonth = new Date();
-        expectedMonth.setMonth(expectedMonth.getMonth() - (monthsToLoan - index - 1));
-        return month === expectedMonth.toISOString().slice(0, 7);
+    if (isCooperativeAdmin) {
+      // Fetch stats for all members under the cooperative
+      allSavings = await prisma.memberSavings.findMany({
+        where: { member: { cooperativeId } },
+        include: {
+          member: { select: { firstName: true, surname: true, email: true } },
+        },
       });
 
-    const response = {
-      savings: savingsStats,
-      contributions: contributionStats,
-      overall: overallStats,
-      eligibility: isEligibleForLoan ? 'Eligible for Loan' : 'Not Eligible for Loan',
-      eligibilityExplanation: isEligibleForLoan
-        ? `Member has made contributions for ${monthsToLoan} consecutive months.`
-        : `Member needs to contribute for ${monthsToLoan} consecutive months to be eligible.`,
-    };
+      allLoans = await prisma.loansRequested.findMany({
+        where: { member: { cooperativeId }, approved: true },
+        include: {
+          member: { select: { firstName: true, surname: true, email: true } },
+        },
+      });
+    } else {
+      // Fetch stats for the individual member
+      allSavings = await prisma.memberSavings.findMany({
+        where: { memberId },
+        include: {
+          member: { select: { firstName: true, surname: true, email: true } },
+        },
+      });
 
-    // Log detailed stats to the console for monitoring
-    console.log('Detailed Member Savings and Contributions Stats:', JSON.stringify(response, null, 2));
+      allLoans = await prisma.loansRequested.findMany({
+        where: { memberId, approved: true },
+        include: {
+          member: { select: { firstName: true, surname: true, email: true } },
+        },
+      });
+    }
 
-    res.status(200).json(response);
+    // Process and group data by date
+    const recordsByDate = {};
+    [...allSavings, ...allLoans].forEach((record) => {
+      const date =
+        record.dateOfEntry?.toISOString().slice(0, 10) ||
+        record.dateOfApplication?.toISOString().slice(0, 10);
+
+      if (!recordsByDate[date]) {
+        recordsByDate[date] = {
+          date,
+          savings: 0,
+          contributions: 0,
+          loans: 0,
+          grandTotal: 0,
+        };
+      }
+
+      if (record.type === 'savings') {
+        recordsByDate[date].savings += record.savingsDeposits || 0;
+      } else if (record.type === 'contribution') {
+        recordsByDate[date].contributions += record.savingsDeposits || 0;
+      } else if (record.expectedAmountToBePaidBack) {
+        recordsByDate[date].loans += record.expectedAmountToBePaidBack || 0;
+      }
+    });
+
+    // Calculate cumulative totals
+    let cumulativeSavings = 0;
+    let cumulativeLoans = 0;
+
+    const stats = Object.values(recordsByDate).map((record) => {
+      cumulativeSavings += record.savings;
+      cumulativeLoans += record.loans;
+      record.grandTotal = cumulativeSavings - cumulativeLoans;
+      return record;
+    });
+
+    console.log('Calculated stats:', stats);
+
+    // Send JSON response
+    res.status(200).json({
+      stats,
+      requesterType: isCooperativeAdmin ? 'Cooperative Admin' : 'Member',
+    });
   } catch (error) {
-    console.error('Error fetching member savings stats:', error);
-    res.status(500).json({ error: 'Failed to fetch member savings stats' });
+    console.error('Error fetching savings stats:', error);
+    res.status(500).json({ error: 'Failed to fetch savings stats', details: error.message });
   }
 });
 

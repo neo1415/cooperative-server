@@ -165,7 +165,7 @@ model CooperativeAdminSettings {
   entranceFee    Int?
   loanUpperLimit Float?
   monthsToLoan       Int?
-  // maxAmount        Int?
+  gracePeriod        Int?
   // amountInterestRate Float?
   createdAt        DateTime @default(now())
 }
