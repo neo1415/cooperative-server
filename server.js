@@ -1466,10 +1466,33 @@ app.put('/edit-cooperative-admin-setting/:id', verifyFirebaseToken, async (req, 
     const { id } = req.params;
     const { loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan, gracePeriod, increaseRate } = req.body;
 
+    console.log('Updating admin setting with ID:', id);
+
+    // Check if the record exists
+    const existingSetting = await prisma.cooperativeAdminSettings.findUnique({
+      where: { id },
+    });
+
+    if (!existingSetting) {
+      console.log('Record not found for ID:', id);
+      return res.status(404).json({ error: `No cooperative admin setting found for ID: ${id}` });
+    }
+
+    // Perform the update
     const updatedSetting = await prisma.cooperativeAdminSettings.update({
       where: { id },
-      data: {loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan ,gracePeriod, increaseRate },
+      data: {
+        loanFormPrice,
+        shareCapital,
+        entranceFee,
+        loanUpperLimit,
+        monthsToLoan,
+        gracePeriod,
+        increaseRate,
+      },
     });
+
+    console.log('Updated setting:', updatedSetting);
 
     res.status(200).json(updatedSetting);
   } catch (error) {
@@ -1477,6 +1500,7 @@ app.put('/edit-cooperative-admin-setting/:id', verifyFirebaseToken, async (req, 
     res.status(500).json({ error: 'Failed to update loan interest setting' });
   }
 });
+
 
 // PUT: Update loan interest setting by ID
 app.put('/edit-loan-interest-setting/:id', verifyFirebaseToken, async (req, res) => {
