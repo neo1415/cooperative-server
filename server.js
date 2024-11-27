@@ -1011,7 +1011,7 @@ app.post('/loan-request', verifyFirebaseToken, async (req, res) => {
     const formattedLoanInterest = parseFloat(loanInterest.toFixed(2));
 
     // Fetch admin settings for the cooperative
-    const adminSettings = await prisma.cooperativeSettings.findFirst({
+    const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
       where: { cooperativeId },
     });
 
@@ -1938,7 +1938,7 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-const userId = 'UCKromrtmSPVIiFf1dodzZH0v2F3';
+const userId = 'RwgMDHi34YR9MfOEdPgf2WuxWRn1';
 
 // Function to add the custom claim
 const addCustomClaim = async () => {
@@ -2135,9 +2135,18 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
     }
 
     // Assign custom claims
-    if (defaulter) claims.defaulter = true;
+       // Assign custom claims
+       if (defaulter) claims.defaulter = true;
 
-    await admin.auth().setCustomUserClaims(memberId, claims);
+       // Retrieve existing custom claims to avoid overwriting them
+       const userRecord = await admin.auth().getUser(memberId);
+       const existingClaims = userRecord.customClaims || {};
+   
+       // Merge existing claims with new claims and update
+       await admin.auth().setCustomUserClaims(memberId, {
+         ...existingClaims, // Preserve current claims like 'role'
+         ...claims,         // Add new claims (e.g., 'defaulter', 'debtor')
+       });
 
     const response = {
       stats,
