@@ -823,9 +823,12 @@ app.post('/register-member', async (req, res) => {
 
 // KYC submission route: /member-kyc
 
+
 app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, res) => {
-  const memberId = req.body.memberId;
-  const memberKycData = req.body;
+
+  try {
+
+     const { memberId, ...memberKycData } = req.body;
 
   console.log("Received memberId:", memberId);
   console.log("Received KYC data:", memberKycData);
@@ -845,8 +848,6 @@ app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, r
       return res.status(500).json({ error: "Failed to upload image" });
     }
   }
-
-  try {
     // Fetch the member's registration number
     const member = await prisma.member.findUnique({
       where: { id: memberId },
