@@ -515,14 +515,19 @@ app.post('/register', async (req, res) => {
       displayName: cooperativeName,
     });
 
+    console.log('Firebase user created with UID:', userRecord.uid);
+
     // Generate registration number
     const registrationNumber = generateCooperativeRegistrationNumber();
+    console.log('Generated registration number:', registrationNumber);
 
     // Set custom claims
     await admin.auth().setCustomUserClaims(userRecord.uid, {
       role: 'cooperative-admin',
       kycIncomplete: true,
     });
+
+    console.log('Custom claims set for user:', userRecord.uid);
 
     // Save cooperative data in Prisma with registration number
     const cooperative = await prisma.cooperative.create({
@@ -534,10 +539,29 @@ app.post('/register', async (req, res) => {
       },
     });
 
+    console.log('Cooperative saved in database:', cooperative);
+
+    // Create default admin settings for the cooperative
+    const defaultAdminSettings = await prisma.cooperativeAdminSettings.create({
+      data: {
+        cooperativeId: cooperative.id, // Link the settings to the cooperative
+        loanFormPrice: 0,
+        shareCapital: 0,
+        entranceFee: 0,
+        loanUpperLimit: 0,
+        monthsToLoan: 0,
+        gracePeriod: 0, // Default value for grace period
+        increaseRate: 0,
+      },
+    });
+
+    console.log('Default admin settings created for cooperative:', defaultAdminSettings);
+
     res.status(201).json({
       message: 'User created, verification email sent',
       cooperativeId: userRecord.uid,
       cooperative,
+      adminSettings: defaultAdminSettings,
     });
   } catch (error) {
     if (error.code === 'auth/email-already-exists') {
@@ -1464,23 +1488,40 @@ app.post('/loan-interest-settings', verifyFirebaseToken, async (req, res) => {
 app.put('/edit-cooperative-admin-setting/:id', verifyFirebaseToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { loanFormPrice, shareCapital, entranceFee, loanUpperLimit, monthsToLoan, gracePeriod, increaseRate } = req.body;
+    const {
+      loanFormPrice,
+      shareCapital,
+      entranceFee,
+      loanUpperLimit,
+      monthsToLoan,
+      gracePeriod,
+      increaseRate,
+    } = req.body;
 
     console.log('Updating admin setting with ID:', id);
 
-    // Check if the record exists
-    const existingSetting = await prisma.cooperativeAdminSettings.findUnique({
+    let setting = await prisma.cooperativeAdminSettings.findUnique({
       where: { id },
     });
 
-    if (!existingSetting) {
-      console.log('Record not found for ID:', id);
-      return res.status(404).json({ error: `No cooperative admin setting found for ID: ${id}` });
+    if (!setting) {
+      console.log('No settings found for ID. Creating default settings...');
+      setting = await prisma.cooperativeAdminSettings.create({
+        data: {
+          cooperativeId: id, // Use the cooperativeId here
+          loanFormPrice: 0,
+          shareCapital: 0,
+          entranceFee: 0,
+          loanUpperLimit: 0,
+          monthsToLoan: 0,
+          gracePeriod: 0,
+          increaseRate: 0,
+        },
+      });
     }
 
-    // Perform the update
     const updatedSetting = await prisma.cooperativeAdminSettings.update({
-      where: { id },
+      where: { id: setting.id },
       data: {
         loanFormPrice,
         shareCapital,
@@ -1496,8 +1537,8 @@ app.put('/edit-cooperative-admin-setting/:id', verifyFirebaseToken, async (req, 
 
     res.status(200).json(updatedSetting);
   } catch (error) {
-    console.error('Error updating loan interest setting:', error);
-    res.status(500).json({ error: 'Failed to update loan interest setting' });
+    console.error('Error updating admin settings:', error);
+    res.status(500).json({ error: 'Failed to update admin settings' });
   }
 });
 
