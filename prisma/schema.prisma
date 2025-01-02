@@ -31,7 +31,12 @@ model Cooperative {
   savings               MemberSavings[] // One-to-many relation to MemberSavings
   loansRequested        LoansRequested[] // One-to-many relation to LoansRequested
   loansApproved         LoansApproved[] // One-to-many relation to LoansApproved
+  assetsRequired        AssetsRequested[]
+  assetsApproved        AssetsApproved[]
+  assets                Assets[]
   debtors               Debtor[] 
+  defaulter             Defaulter[]
+  assetDebtor           AssetDebtor[]
   loanInterestSetting   LoanInterestSetting[]     // One-to-many relation to Debtor
   cooperativeAdminSettings CooperativeAdminSettings[]
   roles                 Role[]         // One-to-many relation to Role
@@ -87,6 +92,9 @@ model Member {
   loansRequested    LoansRequested[] // One-to-many relation to LoansRequested
   loansApproved     LoansApproved[]  // One-to-many relation to LoansApproved
   memberSavings     MemberSavings[] // Relation to MemberSavings
+   assetsRequired        AssetsRequested[]
+  assetsApproved        AssetsApproved[]
+
   membersFinancialPosition MembersFinancialPosition? // Financial position linked to the member
   personalLedgers   personalLedgers[] // Access to personal ledger
 }
@@ -142,6 +150,22 @@ model MemberSavings {
     type              String?   // "savings" or "contribution"
   savingsFrequency   Int      @default(0) // New field to track deposit frequency
 }
+
+model Defaulter {
+ id                String   @id @default(uuid())
+  // member            Member   @relation(fields: [memberId], references: [id])
+  memberId          String
+  cooperative       Cooperative @relation(fields: [cooperativeId], references: [id])
+  cooperativeId     String
+  surname           String?
+  firstName         String?
+  middleName        String?
+ telephone         String?
+  savingsDeposits   Int
+ grandTotal        Int
+    type              String?   
+}
+
 
 model LoanInterestSetting {
   id               String   @id @default(uuid())
@@ -255,14 +279,40 @@ model Debtor {
   member                Member   @relation(fields: [memberId], references: [id])
   memberId              String
   cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
+  surname               String?
+  firstName             String?
+  middleName            String?
+  membersNo             String?
+  amountRequired        Int
+  purposeOfLoan         String
+  dateOfApplication     DateTime?
+  durationOfLoan        Int
+  balanceInTheSavingsAccount  String?
+  bvn                   String
+  nameOfSurety1         String
+  surety1MembersNo      String
+  surety1telePhone      String
+  surety1balanceInTheSavingsAccount String?
+  nameOfSurety2         String
+  surety2MembersNo      String
+  surety2telePhone      String
+  surety2balanceInTheSavingsAccount String?
+  amountGuaranteed      String?
+  paymentVoucherNO      String?
+  amountGranted         Int?
+  loanInterest          Int?
+  interestRate                 Float? 
+  repaymentsPrincipal   Int?
+ expectedReimbursementDate        DateTime
+  repaymentsInterest    Int?
+  balanceOutstandingPrincipal Int?
+  balanceOutstandingInterest  Int?
+  balanceOutstandingTotal Int?
+  expectedAmountToBePaidBack  Int?
+  approved              Boolean?
+  rejected              Boolean?
+  pending               Boolean?
   cooperativeId         String
-  dateLoanReceived      DateTime
-  noOfMonths            Int
-  membersCapital        Float
-  ordinarySavings       Float
-  specialSavings        Float
-  memberLoan            Float
-  interestOnLoan        Float
 }
 
 model MembersFinancialPosition {
@@ -320,11 +370,116 @@ model Role {
   cooperativeId String?
 }
 
+model Assets {
+  id                      String   @id @default(uuid())
+  cooperative             Cooperative @relation(fields: [cooperativeId], references: [id])
+  cooperativeId           String
+  assetName               String
+  assetShortDescription   String
+  assetLongDescription    String
+  assetPrice              Int?
+  img1                    String?
+  img2                    String?
+  img3                    String?
+  formPrice               Int?
+  unitNumber              Int?
+  priceInterestRate       Int?
+   minDurationMonths Int?
+  maxDurationMonths Int?
+  durationInterestRate Float?
+  totalInterestRate     Float?
+ createdAt        DateTime @default(now())
+}
 
-// model assetsRequested {
+model AssetsRequested {
+ id                    String   @id @default(uuid())
+  member                Member   @relation(fields: [memberId], references: [id])
+  memberId              String
+  cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
+   surname               String?
+  firstName             String?
+  middleName            String?
+  dateOfApplication     DateTime?
+  assetName           String?
+  assetPrice          String?
+  assetShortDescription     String?
+  img1                String?
+   totalPrice              Int?
+  durationOfLoan        Int
+   nameOfSurety1         String
+  surety1MembersNo      String
+  surety1telePhone      String
+nameOfSurety2         String
+  surety2MembersNo      String
+  surety2telePhone      String
+loanInterest          Int?
+ interestRate                 Float? 
+ expectedReimbursementDate        DateTime
+  expectedAmountToBePaidBack  Int?
+ approved              Boolean?
+  rejected              Boolean?
+  pending               Boolean?
+  cooperativeId         String
+}
 
-// }
+model AssetsApproved {
+id                    String   @id @default(uuid())
+  member                Member   @relation(fields: [memberId], references: [id])
+  memberId              String
+  cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
+   surname               String?
+  firstName             String?
+  middleName            String?
+  dateOfApplication     DateTime?
+   assetPrice              Int?
+  durationOfLoan        Int
+ nameOfSurety1         String
+  surety1MembersNo      String
+  surety1telePhone      String
+nameOfSurety2         String
+  surety2MembersNo      String
+  surety2telePhone      String
+loanInterest          Int?
+ interestRate                 Float? 
+ expectedReimbursementDate        DateTime
+  expectedAmountToBePaidBack  Int?
+ approved              Boolean?
+  rejected              Boolean?
+  pending               Boolean?
+  cooperativeId         String
+}
 
+
+model AssetDebtor {
+  id                    String   @id @default(uuid())
+  // member                Member   @relation(fields: [memberId], references: [id])
+  memberId              String
+  cooperative           Cooperative @relation(fields: [cooperativeId], references: [id])
+   surname               String?
+  firstName             String?
+  middleName            String?
+  dateOfApplication     DateTime?
+  assetName           String?
+  assetPrice          String?
+  assetShortDescription     String?
+  img1                String?
+   totalPrice              Int?
+  durationOfLoan        Int
+   nameOfSurety1         String
+  surety1MembersNo      String
+  surety1telePhone      String
+nameOfSurety2         String
+  surety2MembersNo      String
+  surety2telePhone      String
+loanInterest          Int?
+ interestRate                 Float? 
+ expectedReimbursementDate        DateTime
+  expectedAmountToBePaidBack  Int?
+ approved              Boolean?
+  rejected              Boolean?
+  pending               Boolean?
+  cooperativeId         String
+}
 // model assetTransferred {
 
 // }

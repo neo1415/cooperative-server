@@ -303,7 +303,7 @@ async function verifyFirebaseToken(req, res, next) {
   
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
-    console.log("Decoded token:", decodedToken);
+    // console.log("Decoded token:", decodedToken);
 
     req.user = {
       uid: decodedToken.uid,
@@ -312,7 +312,7 @@ async function verifyFirebaseToken(req, res, next) {
       memberId: decodedToken.memberId || null,
     };
 
-    console.log("User data from token:", req.user);
+    // console.log("User data from token:", req.user);
 
     if (req.user.role === 'cooperative-admin' && !req.user.cooperativeId) {
       console.log("Searching for cooperative in database...");
@@ -322,7 +322,7 @@ async function verifyFirebaseToken(req, res, next) {
       });
 
       if (cooperative) {
-        console.log("Cooperative found:", cooperative);
+        // console.log("Cooperative found:", cooperative);
         req.user.cooperativeId = cooperative.id;
       } else {
         console.log("403 Forbidden: Cooperative admin not found in database");
@@ -338,7 +338,7 @@ async function verifyFirebaseToken(req, res, next) {
       });
 
       if (member) {
-        console.log("Member found:", member);
+        // console.log("Member found:", member);
         req.user.memberId = member.id;
         req.user.cooperativeId = member.cooperativeId;
       } else {
@@ -757,7 +757,7 @@ app.get('/cooperative/profileSettings',verifyFirebaseToken, async (req, res) => 
 
     // Return the cooperative data and totals
     res.status(200).json({ ...cooperative, totals });
-    console.log({ ...cooperative, totals });
+    // console.log({ ...cooperative, totals });
 
   } catch (error) {
     console.error('Error fetching cooperative profile:', error);
@@ -1203,6 +1203,15 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
 
     console.log('All Loans Fetched:', allLoans);
 
+    const allAssets = await prisma.assetsRequested.findMany({
+      where: {
+        // filter, 
+        approved:true},
+      include: { member: { select: { firstName: true, surname: true, email: true } } },
+    });
+
+    console.log('All Assets Fetched:', allAssets);
+
     // Helper functions for calculations
     const calculateTotalAmount = (records, field) =>
       records.reduce((sum, record) => sum + (record[field] || 0), 0);
@@ -1218,6 +1227,18 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
       return stats;
     };
 
+    
+    const calculateAssetMonthlyStats = (records) => {
+      const assetStats = {};
+      records.forEach((record) => {
+        const month = record.dateOfApplication.toISOString().slice(0, 7); // "YYYY-MM"
+        if (!stats[month]) stats[month] = { count: 0, total: 0 };
+        stats[month].count += 1;
+        stats[month].total += record.totalPrice || 0;
+      });
+      return assetStats;
+    };
+
     const calculateYearlyStats = (records) => {
       const stats = {};
       records.forEach((record) => {
@@ -1229,12 +1250,27 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
       return stats;
     };
 
+    const calculateAssetYearlyStats = (records) => {
+      const assetStats = {};
+      records.forEach((record) => {
+        const year = record.dateOfApplication.toISOString().slice(0, 4); // "YYYY"
+        if (!stats[year]) stats[year] = { count: 0, total: 0 };
+        stats[year].count += 1;
+        stats[year].total += record.expectedAmountToBePaidBack || 0;
+      });
+      return assetStats;
+    };
+
     // Calculate stats
     const monthlyStats = calculateMonthlyStats(allLoans);
     const yearlyStats = calculateYearlyStats(allLoans);
+    const monthlyAssetStats = calculateMonthlyStats(allAssets);
+    const yearlyAssetStats = calculateYearlyStats(allAssets);
     const totalAmountRequested = calculateTotalAmount(allLoans, 'amountRequired');
     const totalAmountGranted = calculateTotalAmount(allLoans, 'amountGranted');
+    const totalAssetsApproved = calculateTotalAmount(allLoans, 'totalPrice');
     const totalLoans = allLoans.length;
+    const totalAssets = allAssets.length;
 
     // Defaulter logic
     const now = new Date();
@@ -1270,9 +1306,13 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
     const loanStats = {
       totalAmountRequested,
       totalAmountGranted,
+      totalAssetsApproved,
       totalLoans,
+      totalAssets,
       monthly: monthlyStats,
       yearly: yearlyStats,
+      monthly: monthlyAssetStats,
+      yearly: yearlyAssetStats,
       defaulters,
     };
 
@@ -1902,6 +1942,29 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
     const memberId = await getMemberIdFromAuth(authHeader);
     const member = await findMemberById(memberId);
 
+    // Fetch shareCapital from cooperativeAdminSettings
+    const cooperativeSettings = await prisma.cooperativeAdminSettings.findFirst({
+      where: { cooperativeId: member.cooperativeId },
+    });
+
+    if (!cooperativeSettings) {
+      return res.status(404).json({ error: 'Cooperative settings not found' });
+    }
+
+    const shareCapital = cooperativeSettings.shareCapital;
+
+    // Check if this is the member's first deposit
+    const existingSavings = await prisma.memberSavings.findFirst({
+      where: { memberId },
+    });
+
+    let adjustedAmount = amount;
+
+    // Add shareCapital if it's the first deposit
+    if (!existingSavings) {
+      adjustedAmount += shareCapital;
+    }
+
     const lastSavingsRecord = await prisma.memberSavings.findFirst({
       where: { memberId },
       orderBy: { dateOfEntry: 'desc' },
@@ -1909,7 +1972,7 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
 
     // Calculate new balance, withdrawals, and grand total
     const previousBalance = lastSavingsRecord?.savingsBalance || 0;
-    const newBalance = previousBalance + amount;
+    const newBalance = previousBalance + adjustedAmount;
     const totalWithdrawals = lastSavingsRecord?.totalWithdrawals || 0;
     const grandTotal = newBalance - totalWithdrawals;
 
@@ -1921,7 +1984,7 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
       data: {
         memberId,
         cooperativeId: member.cooperativeId,
-        savingsDeposits: amount,
+        savingsDeposits: adjustedAmount,
         withdrawals: 0,
         savingsBalance: newBalance,
         totalWithdrawals,
@@ -1931,12 +1994,30 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
       },
     });
 
-    res.status(200).json(savingsDeposit);
+    res.status(200).json({
+      ...savingsDeposit,
+      shareCapitalIncluded: !existingSavings, // Indicate if shareCapital was added
+    });
   } catch (error) {
     console.error('Error processing savings deposit:', error);
     res.status(500).json({ error: 'Failed to process savings deposit' });
   }
 });
+
+app.get('/member/first-deposit', verifyFirebaseToken, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const memberId = await getMemberIdFromAuth(authHeader);
+    const existingSavings = await prisma.memberSavings.findFirst({
+      where: { memberId },
+    });
+    res.status(200).json(!existingSavings); // Returns true if first deposit
+  } catch (error) {
+    console.error('Error fetching first deposit status:', error);
+    res.status(500).json({ error: 'Failed to fetch deposit status' });
+  }
+});
+
 
 const userId = 'RwgMDHi34YR9MfOEdPgf2WuxWRn1';
 
@@ -1963,6 +2044,96 @@ const addCustomClaim = async () => {
 // Call the function when the app starts
 addCustomClaim();
 
+app.get('/member/credit-score', verifyFirebaseToken, async (req, res) => {
+  try {
+    console.log('Fetching credit score for member...');
+
+    const authHeader = req.headers.authorization;
+    const memberId = await getMemberIdFromAuth(authHeader);
+
+    console.log('Member ID:', memberId);
+
+    // Fetch member and cooperative details
+    const member = await prisma.member.findUnique({
+      where: { id: memberId },
+      select: { cooperativeId: true },
+    });
+
+    if (!member) {
+      console.error('Member not found');
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    const cooperativeId = member.cooperativeId;
+    console.log('Cooperative ID:', cooperativeId);
+
+    // Fetch admin settings
+    const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
+      where: { cooperativeId },
+      select: { monthsToLoan: true, increaseRate: true, gracePeriod: true },
+    });
+
+    if (!adminSettings) {
+      console.error('Admin settings not found');
+      return res.status(404).json({ error: 'Admin settings not found' });
+    }
+
+    const { monthsToLoan, increaseRate, gracePeriod } = adminSettings;
+
+    console.log('Admin Settings:', { monthsToLoan, increaseRate, gracePeriod });
+
+    // Fetch savings, loans, and assets
+    const savings = await prisma.memberSavings.findMany({ where: { memberId } });
+    const loans = await prisma.loansRequested.findMany({ where: { memberId } });
+    const assets = await prisma.assetsRequested.findMany({ where: { memberId, approved: true } });
+
+    console.log('Savings:', savings);
+    console.log('Loans:', loans);
+    console.log('Assets:', assets);
+
+    // Calculate cumulative totals and defaults
+    const cumulativeSavings = savings.reduce((sum, s) => sum + parseFloat(s.savingsDeposits || 0), 0);
+    const totalLoans = loans.length;
+    const totalAssets = assets.length;
+    const loanDefaults = loans.filter((loan) => !loan.repaid && new Date() > new Date(loan.expectedReimbursementDate)).length;
+    const assetDefaults = assets.filter((asset) => new Date() > new Date(asset.graceEndDate)).length;
+
+    console.log('Cumulative Savings:', cumulativeSavings);
+    console.log('Total Loans:', totalLoans);
+    console.log('Loan Defaults:', loanDefaults);
+    console.log('Total Assets:', totalAssets);
+    console.log('Asset Defaults:', assetDefaults);
+
+    // Calculate contribution eligibility
+    const contributionMonths = new Set(savings.map((s) => s.dateOfEntry.toISOString().slice(0, 7)));
+    const contributionsEligible = contributionMonths.size >= monthsToLoan;
+
+    console.log('Contribution Months:', contributionMonths);
+    console.log('Contributions Eligible:', contributionsEligible);
+
+    // Credit score calculation
+    const savingsScore = Math.min(cumulativeSavings / 10000, 1) * 10; // Example threshold of 10,000
+    const loanScore = totalLoans > 0 ? (1 - loanDefaults / totalLoans) * 10 : 10;
+    const assetScore = totalAssets > 0 ? (1 - assetDefaults / totalAssets) * 10 : 10;
+    const contributionScore = contributionsEligible ? 10 : (contributionMonths.size / monthsToLoan) * 10;
+
+    const creditScore = ((savingsScore + loanScore + assetScore + contributionScore) / 4).toFixed(2);
+
+    console.log('Credit Score Breakdown:', {
+      savingsScore,
+      loanScore,
+      assetScore,
+      contributionScore,
+    });
+
+    console.log('Final Credit Score:', creditScore);
+
+    res.status(200).json({ creditScore });
+  } catch (error) {
+    console.error('Error calculating credit score:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 
 // File: /server/routes/memberStats.js
@@ -1971,6 +2142,8 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
     const authHeader = req.headers.authorization;
     const memberId = await getMemberIdFromAuth(authHeader);
 
+    console.log('Member ID:', memberId);
+
     // Fetch cooperative settings
     const cooperative = await prisma.member.findUnique({
       where: { id: memberId },
@@ -1978,47 +2151,107 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
     });
 
     if (!cooperative) {
+      console.error('Cooperative not found for member');
       return res.status(404).json({ error: 'Cooperative not found for member' });
     }
 
     const cooperativeId = cooperative.cooperativeId;
+    console.log('Cooperative ID:', cooperativeId);
+
+    // Fetch admin settings
     const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
       where: { cooperativeId },
       select: { monthsToLoan: true, gracePeriod: true, increaseRate: true },
     });
 
     const { monthsToLoan = 0, gracePeriod = 0, increaseRate = 0 } = adminSettings || {};
+    console.log('Admin Settings:', adminSettings);
 
+    // Fetch member details and info
     const memberDetails = await prisma.membersDetails.findUnique({
       where: { memberId },
-      select: { amountPaid: true },
+      select: {
+        amountPaid: true,
+        img: true,
+        telephone1: true,
+        permanentHomeAddress: true,
+        nextOfKinName: true,
+        nextOfKinPhone: true,
+        bvn: true,
+        residentialAddress: true,
+      },
     });
 
-    const amountPaid = memberDetails?.amountPaid || 0;
+    const memberInfo = await prisma.member.findUnique({
+      where: { id: memberId },
+      select: {
+        firstName: true,
+        surname: true,
+        email: true,
+      },
+    });
 
-    // Fetch savings and loans records
+    if (!memberDetails || !memberInfo) {
+      console.error('Member details not found');
+      return res.status(404).json({ error: 'Member details not found' });
+    }
+
+    // console.log('Member Details:', memberDetails);
+
+    // Fetch savings, loans, and asset requests
     const allSavings = await prisma.memberSavings.findMany({
       where: { memberId },
-      include: {
-        member: { select: { firstName: true, surname: true, email: true } },
-      },
     });
 
     const allLoans = await prisma.loansRequested.findMany({
       where: { memberId },
-      include: {
-        member: { select: { firstName: true, surname: true, email: true } },
+    });
+
+    const allAssetsRequested = await prisma.assetsRequested.findMany({
+      where: {
+        memberId,
+        approved: true,
       },
     });
 
-    // Group savings and loans by date
+    // console.log('Fetched Savings:', allSavings);
+    // console.log('Fetched Loans:', allLoans);
+    // console.log('Fetched Assets Requested:', allAssetsRequested);
+
+    // Calculate total approved asset price
+    const totalApprovedAssetPrice = allAssetsRequested.reduce(
+      (sum, asset) => sum + parseFloat(asset.totalPrice || 0),
+      0
+    );
+
+    console.log('Total Approved Asset Price:', totalApprovedAssetPrice);
+
+    // Group records by date
     const recordsByDate = {};
-    [...allSavings, ...allLoans].forEach((record) => {
+    [...allSavings, ...allLoans, ...allAssetsRequested].forEach((record) => {
       const date =
         record.dateOfEntry?.toISOString().slice(0, 10) ||
-        record.dateOfApplication.toISOString().slice(0, 10);
+        record.dateOfApplication?.toISOString().slice(0, 10) ||
+        record.dateRequested?.toISOString().slice(0, 10);
+
       if (!recordsByDate[date]) {
-        recordsByDate[date] = { date, savings: 0, contributions: 0, loans: 0, grandTotal: 0 };
+        recordsByDate[date] = {
+          date,
+          savings: 0,
+          contributions: 0,
+          loans: 0,
+          assets: 0, // Initialize assets
+          grandTotal: 0,
+          firstName: memberInfo.firstName,
+          surname: memberInfo.surname,
+          email: memberInfo.email,
+          img: memberDetails.img || null,
+          telephone1: memberDetails.telephone1,
+          residentialAddress: memberDetails.residentialAddress,
+          nextOfKinName: memberDetails.nextOfKinName,
+          nextOfKinPhone: memberDetails.nextOfKinPhone,
+          bvn: memberDetails.bvn,
+        };
       }
 
       if (record.type === 'savings') {
@@ -2027,28 +2260,35 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
         recordsByDate[date].contributions += record.savingsDeposits || 0;
       } else if (record.expectedAmountToBePaidBack) {
         recordsByDate[date].loans += record.expectedAmountToBePaidBack || 0;
+      } else if (record.totalPrice) {
+        recordsByDate[date].assets += parseFloat(record.totalPrice) || 0; // Fix: Add to assets
       }
     });
 
     // Sort records by date
     const sortedDates = Object.keys(recordsByDate).sort();
 
-    // Initialize claims object before usage
-    const claims = {}; // Moved to the top for consistency
     let cumulativeSavings = 0;
     let cumulativeLoans = 0;
     let defaulter = false;
-    let ineligible = true;
-
-    const now = new Date();
+    let ineligible = false;
+    const claims = {};
     const contributionCheck = new Map(); // Track months with contributions
+
     const stats = sortedDates.map((date) => {
       const record = recordsByDate[date];
       cumulativeSavings += record.savings || 0;
       cumulativeLoans += record.loans || 0;
+      cumulativeLoans += record.assets || 0; // Include assets in cumulative loans
 
       // Calculate grand total
       record.grandTotal = cumulativeSavings - cumulativeLoans;
+
+      if (record.grandTotal < 0) {
+        ineligible = true;
+      }
+
+      console.log(`Date: ${date}, Grand Total: ${record.grandTotal}`);
 
       // Track months with contributions
       const month = date.slice(0, 7);
@@ -2059,47 +2299,53 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
       return record;
     });
 
+    // console.log('Cumulative Savings:', cumulativeSavings);
+    
     // Check consecutive contributions for eligibility
-    const monthsWithData = Array.from(contributionCheck.keys()).sort(); // Months with contributions (YYYY-MM)
-    if (monthsWithData.length > 0) {
-      const earliestMonth = new Date(`${monthsWithData[0]}-01`); // First contribution month
-      const currentMonth = new Date();
-
+    function checkConsecutiveContributions(contributionCheck, monthsToLoan) {
+      const monthsWithData = Array.from(contributionCheck.keys()).sort();
       let consecutiveMonths = 0;
 
-      // Generate all months between the first contribution and the current month
-      const allMonths = [];
-      let tempMonth = new Date(earliestMonth);
+      if (monthsWithData.length > 0) {
+        const earliestMonth = new Date(`${monthsWithData[0]}-01`);
+        const currentMonth = new Date();
 
-      while (tempMonth <= currentMonth) {
-        allMonths.push(tempMonth.toISOString().slice(0, 7)); // Format YYYY-MM
-        tempMonth.setMonth(tempMonth.getMonth() + 1); // Move to the next month
-      }
+        const allMonths = [];
+        let tempMonth = new Date(earliestMonth);
 
-      // Validate contributions for each month
-      for (let i = 0; i < allMonths.length; i++) {
-        const month = allMonths[i];
-
-        if (contributionCheck.has(month)) {
-          consecutiveMonths++;
-        } else {
-          consecutiveMonths = 0; // Reset if a month is missing
+        while (tempMonth <= currentMonth) {
+          allMonths.push(tempMonth.toISOString().slice(0, 7));
+          tempMonth.setMonth(tempMonth.getMonth() + 1);
         }
 
-        if (consecutiveMonths >= monthsToLoan) {
-          ineligible = false;
-          break;
+        for (let i = 0; i < allMonths.length; i++) {
+          const month = allMonths[i];
+
+          if (contributionCheck.has(month)) {
+            consecutiveMonths++;
+          } else {
+            consecutiveMonths = 0;
+          }
+
+          if (consecutiveMonths >= monthsToLoan) {
+            return true; // Eligible
+          }
         }
       }
 
-      // Set ineligible flag in claims
-      if (ineligible) {
-        claims.ineligible = true;
-      }
+      return false; // Not eligible
     }
 
+    const contributionsEligible = checkConsecutiveContributions(contributionCheck, monthsToLoan);
+    ineligible = ineligible || !contributionsEligible;
+
+    console.log('Consecutive Contributions Eligibility:', contributionsEligible);
+
     // Grace period logic for contributions
-    const lastContributionDate = new Date(monthsWithData.at(-1) || 0);
+    const now = new Date();
+    const lastContributionDate = new Date(
+      Array.from(contributionCheck.keys()).sort().at(-1) || 0
+    );
     const nextDueDate = new Date(lastContributionDate);
     nextDueDate.setMonth(nextDueDate.getMonth() + 1);
 
@@ -2109,6 +2355,49 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
 
       if (now > graceEndDate) {
         defaulter = true;
+        console.log('Adding to Defaulter model for contributions.');
+
+        await prisma.defaulter.create({
+          data: {
+            memberId,
+            dateOfEntry: saving.dateOfEntry,
+            surname: memberDetails.surname,
+            firstName: memberDetails.firstName,
+            telephone: memberDetails.telephone1,
+            savingsDeposit: saving.savingsDeposits,
+            amountOwed: memberDetails.amountPaid,
+            graceEndDate,
+          },
+        });
+        console.log(`Member ID: ${memberId} transferred to Debtor model for contributions.`);
+      }
+    }
+
+ // Handle asset defaults
+    for (const asset of allAssetsRequested) {
+      const graceEndDate = new Date(asset.dateRequested);
+      graceEndDate.setDate(graceEndDate.getDate() + gracePeriod * 7);
+
+      if (now > graceEndDate) {
+        // Transfer to AssetDebtor model
+        await prisma.assetDebtor.create({
+          data: {
+            memberId,
+            surname: asset.surname,
+            firstName: asset.firstName,
+            img: asset.img1,
+            assetName:asset.assetName,
+            loanDuration: asset.loanDuration,
+            nameOfSurety1:asset.nameOfSurety1,
+            surety1telePhone:asset.surety1telePhone,
+            dateOfApplication:asset.dateOfApplication,
+            assetRequestId: asset.id,
+            totalPrice: asset.totalPrice,
+            graceEndDate,
+          },
+        });
+
+        console.log(`Asset Request ID: ${asset.id} transferred to AssetDebtor model.`);
       }
     }
 
@@ -2123,7 +2412,24 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
       if (now > graceEndDate && !loan.repaid) {
         claims.debtor = true;
 
-        // Accrue interest
+                 // Transfer to Debtor model
+                 await prisma.debtor.create({
+                  data: {
+                    memberId,
+                    loanId: loan.id,
+                    surname: memberInfo.surname,
+                    firstName: memberInfo.firstName,
+                    dateOfApplication: loan.dateOfApplication,
+                    durationOfLoan: loan.durationOfLoan,
+                    expectedAmountToBePaidBack: loan.expectedAmountToBePaidBack,
+                    expectedReimbursementDate: loan.expectedReimbursementDate,
+                    amountOwed: loan.expectedAmountToBePaidBack,
+                    graceEndDate,
+                  },
+                });
+
+        console.log(`Loan ID: ${loan.id} transferred to Debtor model.`);
+
         const monthsLate = Math.ceil((now - graceEndDate) / (1000 * 60 * 60 * 24 * 30));
         loan.expectedAmountToBePaidBack += monthsLate * increaseRate * loan.expectedAmountToBePaidBack;
 
@@ -2131,31 +2437,52 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
           where: { id: loan.id },
           data: { expectedAmountToBePaidBack: loan.expectedAmountToBePaidBack },
         });
+
+        console.log(`Loan ID: ${loan.id}, Updated Amount to Be Paid Back: ${loan.expectedAmountToBePaidBack}`);
       }
     }
 
-    // Assign custom claims
-       // Assign custom claims
-       if (defaulter) claims.defaulter = true;
+    if (defaulter) claims.defaulter = true;
 
-       // Retrieve existing custom claims to avoid overwriting them
-       const userRecord = await admin.auth().getUser(memberId);
-       const existingClaims = userRecord.customClaims || {};
-   
-       // Merge existing claims with new claims and update
-       await admin.auth().setCustomUserClaims(memberId, {
-         ...existingClaims, // Preserve current claims like 'role'
-         ...claims,         // Add new claims (e.g., 'defaulter', 'debtor')
-       });
+    // Fetch defaulters, debtors, and assetDebtors
+    const defaulters = await prisma.defaulter.findMany({ where: { memberId } });
+    const debtors = await prisma.debtor.findMany({ where: { memberId } });
+    const assetDebtors = await prisma.assetDebtor.findMany({ where: { memberId } });
+
+    const userRecord = await admin.auth().getUser(memberId);
+    // Fetch Firebase custom claims
+    const customClaims = userRecord.customClaims || {};
+    const existingClaims = userRecord.customClaims || {};
+
+    console.log('Debtors:', debtors);
+    console.log('Defaulters:', defaulters);
+    console.log('Asset Debtors:', assetDebtors);
+    console.log('Custom Claims:', customClaims);
+
+    await admin.auth().setCustomUserClaims(memberId, {
+      ...existingClaims,
+      ...claims,
+    });
 
     const response = {
       stats,
-      defaulter,
+      defaulters,
+      debtors,
+      assetDebtors,
+      customClaims,
       ineligible,
       eligibility: !ineligible
         ? 'Eligible for Loan'
-        : 'Not Eligible: Missing consecutive contributions or outstanding loans',
+        : 'Not Eligible: Negative grand total or missing consecutive contributions.',
+      reasons: ineligible
+        ? {
+            negativeGrandTotal: cumulativeSavings < cumulativeLoans,
+            missingContributions: !contributionsEligible,
+          }
+        : null,
     };
+
+    // console.log('Response Sent:', response);
 
     res.status(200).json(response);
   } catch (error) {
@@ -2164,9 +2491,283 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
   }
 });
 
+app.get('/reports/savings-stats', verifyFirebaseToken, async (req, res) => {
+  try {
+    // Check Authorization Header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized. No token provided.' });
+    }
+
+    // Decode the token
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const { cooperativeId: cooperativeIdFromToken, uid: memberId, role } = decodedToken;
+
+    console.log('Role:', role);
+    console.log('Generating Reports for Member ID:', memberId);
+
+    let cooperativeId = cooperativeIdFromToken;
+
+    // Verify if the role is cooperative-admin
+    if (role === 'member') {
+      // Fetch cooperative ID linked to the member
+      const member = await prisma.member.findUnique({
+        where: { id: memberId },
+        select: { cooperativeId: true },
+      });
+
+      if (!member || !member.cooperativeId) {
+        console.error('Cooperative not found for member');
+        return res.status(404).json({ error: 'Cooperative not found for member' });
+      }
+
+      cooperativeId = member.cooperativeId;
+    }
+
+    console.log('Resolved Cooperative ID:', cooperativeId);
+
+    // Fetch admin settings
+    const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
+      where: { cooperativeId },
+      select: { monthsToLoan: true, gracePeriod: true, increaseRate: true },
+    });
+
+    console.log('Admin Settings:', adminSettings || 'No settings found');
+
+    // Fetch data based on role
+    let allSavings, allLoans, allAssetsRequested;
+
+    if (role === 'cooperative-admin') {
+      // Fetch data for all members in the cooperative
+      allSavings = await prisma.memberSavings.findMany({ where: { cooperativeId } });
+      allLoans = await prisma.loansRequested.findMany({ where: { cooperativeId } });
+      allAssetsRequested = await prisma.assetsRequested.findMany({
+        where: { cooperativeId, approved: true },
+      });
+    } else if (role === 'member') {
+      // Fetch data for the specific member
+      allSavings = await prisma.memberSavings.findMany({ where: { memberId } });
+      allLoans = await prisma.loansRequested.findMany({ where: { memberId } });
+      allAssetsRequested = await prisma.assetsRequested.findMany({
+        where: { memberId, approved: true },
+      });
+    }
+
+    console.log('All Savings:', allSavings.length);
+    console.log('All Loans:', allLoans.length);
+    console.log('All Approved Assets:', allAssetsRequested.length);
+
+    // Aggregate data by yearly, monthly, and all-time
+    const aggregateByPeriod = (records, dateField) => {
+      const yearly = {};
+      const monthly = {};
+      let total = 0;
+
+      records.forEach((record) => {
+        const date = new Date(record[dateField]);
+        const year = date.getFullYear();
+        const month = `${year}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+        yearly[year] = (yearly[year] || 0) + (record.amount || 0);
+        monthly[month] = (monthly[month] || 0) + (record.amount || 0);
+        total += record.amount || 0;
+      });
+
+      return { yearly, monthly, total };
+    };
+
+    const savingsStats = aggregateByPeriod(allSavings, 'dateOfEntry');
+    const loanStats = aggregateByPeriod(allLoans, 'dateOfApplication');
+    const assetStats = aggregateByPeriod(allAssetsRequested, 'dateRequested');
+
+    console.log('Savings Stats:', savingsStats);
+    console.log('Loan Stats:', loanStats);
+    console.log('Asset Stats:', assetStats);
+
+    // Fetch member information for members
+    let memberInfo = null;
+    let memberDetails = null;
+    if (role === 'member') {
+      memberInfo = await prisma.member.findUnique({
+        where: { id: memberId },
+        select: { firstName: true, surname: true, email: true },
+      });
+
+      memberDetails = await prisma.membersDetails.findUnique({
+        where: { memberId },
+        select: {
+          amountPaid: true,
+          img: true,
+          telephone1: true,
+          permanentHomeAddress: true,
+          nextOfKinName: true,
+          nextOfKinPhone: true,
+          bvn: true,
+          residentialAddress: true,
+        },
+      });
+
+      console.log('Member Info:', memberInfo || 'No member info found');
+      console.log('Member Details:', memberDetails || 'No member details found');
+    }
+
+    // Response
+    res.json({
+      role,
+      memberId,
+      cooperativeId,
+      adminSettings,
+      memberInfo,
+      memberDetails,
+      savingsStats,
+      loanStats,
+      assetStats,
+    });
+  } catch (error) {
+    console.error('Error generating report:', error);
+    res.status(500).json({ error: 'Error generating report' });
+  }
+});
+
+// app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
+//   try {
+//     const authHeader = req.headers.authorization;
+//     const memberId = await getMemberIdFromAuth(authHeader);
+
+//     console.log('Member ID:', memberId);
+
+//     const cooperative = await prisma.member.findUnique({
+//       where: { id: memberId },
+//       select: { cooperativeId: true },
+//     });
+
+//     if (!cooperative) {
+//       console.error('Cooperative not found for member');
+//       return res.status(404).json({ error: 'Cooperative not found for member' });
+//     }
+
+//     const cooperativeId = cooperative.cooperativeId;
+
+//     const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
+//       where: { cooperativeId },
+//       select: { gracePeriod: true, increaseRate: true },
+//     });
+
+//     const { gracePeriod = 0, increaseRate = 0 } = adminSettings || {};
+
+//     const memberDetails = await prisma.membersDetails.findUnique({
+//       where: { memberId },
+//       select: {
+//         amountPaid: true,
+//         img: true,
+//         telephone1: true,
+//         permanentHomeAddress: true,
+//         nextOfKinName: true,
+//         nextOfKinPhone: true,
+//         bvn: true,
+//         residentialAddress: true,
+//       },
+//     });
+
+//     const memberInfo = await prisma.member.findUnique({
+//       where: { id: memberId },
+//       select: {
+//         firstName: true,
+//         surname: true,
+//         email: true,
+//       },
+//     });
+
+//     if (!memberDetails || !memberInfo) {
+//       console.error('Member details not found');
+//       return res.status(404).json({ error: 'Member details not found' });
+//     }
+
+//     const allLoans = await prisma.loansRequested.findMany({
+//       where: { memberId },
+//     });
+
+//     const allAssetsRequested = await prisma.assetsRequested.findMany({
+//       where: { memberId, approved: true },
+//     });
+
+//     const now = new Date();
+
+//     // Handle loan defaults
+//     for (const loan of allLoans) {
+//       const dueDate = new Date(loan.dateOfApplication);
+//       dueDate.setMonth(dueDate.getMonth() + loan.durationOfLoan);
+
+//       const graceEndDate = new Date(dueDate);
+//       graceEndDate.setDate(graceEndDate.getDate() + gracePeriod * 7);
+
+//       if (now > graceEndDate && !loan.repaid) {
+//         // Transfer to Debtor model
+//         await prisma.debtor.create({
+//           data: {
+//             memberId,
+//             loanId: loan.id,
+//             amountOwed: loan.expectedAmountToBePaidBack,
+//             graceEndDate,
+//           },
+//         });
+
+//         console.log(`Loan ID: ${loan.id} transferred to Debtor model.`);
+//       }
+//     }
+
+//     // Handle asset defaults
+//     for (const asset of allAssetsRequested) {
+//       const graceEndDate = new Date(asset.dateRequested);
+//       graceEndDate.setDate(graceEndDate.getDate() + gracePeriod * 7);
+
+//       if (now > graceEndDate) {
+//         // Transfer to AssetDebtor model
+//         await prisma.assetDebtor.create({
+//           data: {
+//             memberId,
+//             assetRequestId: asset.id,
+//             totalPrice: asset.totalPrice,
+//             graceEndDate,
+//           },
+//         });
+
+//         console.log(`Asset Request ID: ${asset.id} transferred to AssetDebtor model.`);
+//       }
+//     }
+
+//     // Handle contribution defaults
+//     const lastContributionDate = new Date(memberDetails.amountPaid || 0);
+//     const nextDueDate = new Date(lastContributionDate);
+//     nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+
+//     const graceEndDate = new Date(nextDueDate);
+//     graceEndDate.setDate(graceEndDate.getDate() + gracePeriod * 7);
+
+//     if (now > graceEndDate) {
+//       // Transfer member to Debtor model for contributions
+//       await prisma.debtor.create({
+//         data: {
+//           memberId,
+//           amountOwed: memberDetails.amountPaid,
+//           graceEndDate,
+//         },
+//       });
+
+//       console.log(`Member ID: ${memberId} transferred to Debtor model for contributions.`);
+//     }
+
+//     res.status(200).json({
+//       message: 'Defaulter handling complete. All defaults transferred successfully.',
+//     });
+//   } catch (error) {
+//     console.error('Error processing defaults:', error);
+//     res.status(500).json({ error: 'Failed to process defaults.' });
+//   }
+// });
 
 
-// Updated Route to Fetch Transactions for Member or Cooperative
 app.get('/transactions', verifyFirebaseToken, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -2263,11 +2864,21 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
     const memberId = decodedToken.uid;
 
     // Get the total amount of loans granted to the member
-    const approvedLoans = await prisma.loansApproved.findMany({
-      where: { memberId },
+    const approvedLoans = await prisma.loansRequested.findMany({
+      where: { memberId,
+        approved: true,
+       },
       select: { amountGranted: true },
     });
-    const totalLoansGranted = approvedLoans.reduce((total, loan) => total + loan.amountGranted, 0);
+
+    const approvedAssets = await prisma.assetsRequested.findMany({
+      where: { memberId,
+        approved: true,
+       },
+      select: { totalPrice: true },
+    });
+
+    const totalLoansGranted = approvedLoans.reduce((total, loan) => total + loan.amountGranted, 0) + approvedAssets.reduce((total, asset) => total + asset.totalPrice, 0);
 
     // Fetch latest transaction (if cooperative-admin or member)
     const transaction = await prisma.memberSavings.findFirst({
@@ -2319,46 +2930,495 @@ app.get('/single-transaction', verifyFirebaseToken, async (req, res) => {
     };
 
     res.status(200).json(flattenedTransaction);
+    console.log("transactions:", flattenedTransaction)
   } catch (error) {
     console.error('Error fetching transaction:', error);
     res.status(500).json({ error: 'Failed to fetch transaction', details: error.message });
   }
 });
 
+app.post(
+  "/upload-asset",
+  verifyFirebaseToken,
+  upload.fields([
+    { name: "img1", maxCount: 1 },
+    { name: "img2", maxCount: 1 },
+    { name: "img3", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      console.log("Request received:", req.body);
 
-// app.post('/member/withdraw') - Route for handling withdrawals
-app.post('/member/withdraw', async (req, res) => {
+      const { uid, role, cooperativeId } = req.user;
+      console.log("User info extracted:", { uid, role, cooperativeId });
+
+      if (role !== "cooperative-admin") {
+        return res.status(403).json({ error: "Only cooperative admins can upload assets." });
+      }
+
+      const {
+        assetName,
+        assetShortDescription,
+        assetLongDescription,
+        assetPrice,
+        formPrice,
+        priceInterestRate,
+        interestRates,
+        unitNumber,
+      } = req.body;
+
+      if (!assetName || !assetShortDescription || !assetLongDescription || !assetPrice || !formPrice || !priceInterestRate) {
+        return res.status(400).json({ error: "All required fields must be provided." });
+      }
+
+
+      const parsedInterestRates = JSON.parse(interestRates).map((rate) => ({
+        minDurationMonths: parseInt(rate.minDurationMonths, 10),
+        maxDurationMonths: parseInt(rate.maxDurationMonths, 10),
+        durationInterestRate: parseFloat(rate.durationInterestRate),
+        priceInterestRate: parseFloat(rate.priceInterestRate),
+        totalInterestRate : parseFloat(rate.durationInterestRate) + parseFloat(rate.priceInterestRate)
+      }));
+
+      const uploadedImages = {};
+
+      if (req.files) {
+        for (const [key, fileArray] of Object.entries(req.files)) {
+          if (fileArray && fileArray[0]) {
+            try {
+              uploadedImages[key] = await uploadImageToCloudinary(fileArray[0].buffer);
+            } catch (error) {
+              return res.status(500).json({ error: `Failed to upload ${key}` });
+            }
+          }
+        }
+      }
+
+      const asset = await prisma.assets.create({
+        data: {
+          cooperativeId,
+          assetName,
+          assetShortDescription,
+          assetLongDescription,
+          assetPrice: parseInt(assetPrice, 10),
+          img1: uploadedImages.img1 || null,
+          img2: uploadedImages.img2 || null,
+          img3: uploadedImages.img3 || null,
+          formPrice: parseInt(formPrice, 10),
+          unitNumber: parseInt(unitNumber, 10),
+          priceInterestRate:  parsedInterestRates[0]?.priceInterestRate || null,
+          minDurationMonths: parsedInterestRates[0]?.minDurationMonths || null,
+          maxDurationMonths: parsedInterestRates[0]?.maxDurationMonths || null,
+          durationInterestRate: parsedInterestRates[0]?.durationInterestRate || null,
+          totalInterestRate: parsedInterestRates[0]?.totalInterestRate || null,
+        },
+      });
+
+      res.status(201).json({ message: "Asset uploaded successfully.", asset });
+    } catch (error) {
+      console.error("Error uploading asset:", error.message);
+      res.status(500).json({ error: "Failed to upload asset.", details: error.message });
+    }
+  }
+);
+
+app.get("/fetchAssets", verifyFirebaseToken, async (req, res) => {
   try {
-    const { amount } = req.body;
-    const authHeader = req.headers.authorization;
-    const memberId = await getMemberIdFromAuth(authHeader);
+    const { uid, role, cooperativeId } = req.user;
 
-    const lastSavingsRecord = await prisma.memberSavings.findFirst({
-      where: { memberId },
-      orderBy: { dateOfEntry: 'desc' },
+    // Members can only fetch assets belonging to their cooperative
+    let assets;
+    if (role === "member") {
+      assets = await prisma.assets.findMany({
+        where: { cooperativeId },
+      });
+    } else if (role === "cooperative-admin") {
+      assets = await prisma.assets.findMany({
+        where: { cooperativeId },
+      });
+    } else {
+      return res.status(403).json({ error: "Unauthorized role" });
+    }
+
+    res.status(200).json({ assets });
+  } catch (error) {
+    console.error("Error fetching assets:", error.message);
+    res.status(500).json({ error: "Failed to fetch assets", details: error.message });
+  }
+});
+
+// Route to fetch details of a single asset
+app.get("/fetchIndividualAssets/:id", verifyFirebaseToken, async (req, res) => {
+  try {
+    console.log("Incoming request to fetch asset details");
+
+    const { uid, role, cooperativeId } = req.user;
+    const { id } = req.params;
+
+    console.log("User details from token:", { uid, role, cooperativeId });
+    console.log("Asset ID from params:", id);
+
+    const asset = await prisma.assets.findUnique({
+      where: { id },
     });
 
-    const newBalance = (lastSavingsRecord?.savingsBalance || 0) - amount;
-    const newTotalWithdrawals = (lastSavingsRecord?.totalWithdrawals || 0) + amount;
+    if (!asset) {
+      console.log("Asset not found with ID:", id);
+      return res.status(404).json({ error: "Asset not found" });
+    }
 
-    const withdrawal = await prisma.memberSavings.create({
+    if (asset.cooperativeId !== cooperativeId) {
+      console.log("Unauthorized access attempt by user:", uid);
+      console.log("Asset cooperativeId:", asset.cooperativeId, "User cooperativeId:", cooperativeId);
+      return res.status(403).json({ error: "Unauthorized access to asset details" });
+    }
+
+    console.log("Asset details fetched successfully:", asset);
+    res.status(200).json({ asset });
+  } catch (error) {
+    console.error("Error occurred while fetching asset details:", error);
+    res.status(500).json({ error: "Failed to fetch asset details", details: error.message });
+  }
+});
+
+
+
+// Route to edit an asset
+app.put("/editAssets/:id", verifyFirebaseToken, upload.fields([
+  { name: "img1", maxCount: 1 },
+  { name: "img2", maxCount: 1 },
+  { name: "img3", maxCount: 1 },
+]), async (req, res) => {
+  try {
+    const { uid, role, cooperativeId } = req.user;
+
+    if (role !== "cooperative-admin") {
+      return res.status(403).json({ error: "Only cooperative admins can edit assets." });
+    }
+
+    const { id } = req.params;
+    const {
+      assetName,
+      assetShortDescription,
+      assetLongDescription,
+      assetPrice,
+      formPrice,
+      priceInterestRate,
+      interestRates,
+    } = req.body;
+
+    const asset = await prisma.assets.findUnique({ where: { id } });
+
+    if (!asset || asset.cooperativeId !== cooperativeId) {
+      return res.status(404).json({ error: "Asset not found or unauthorized access" });
+    }
+
+    const uploadedImages = {};
+    if (req.files) {
+      for (const [key, fileArray] of Object.entries(req.files)) {
+        if (fileArray && fileArray[0]) {
+          try {
+            uploadedImages[key] = await uploadImageToCloudinary(fileArray[0].buffer);
+          } catch (error) {
+            return res.status(500).json({ error: `Failed to upload ${key}` });
+          }
+        }
+      }
+    }
+
+    const parsedInterestRates = interestRates
+      ? JSON.parse(interestRates).map((rate) => ({
+          minDurationMonths: parseInt(rate.minDurationMonths, 10),
+          maxDurationMonths: parseInt(rate.maxDurationMonths, 10),
+          durationInterestRate: parseFloat(rate.durationInterestRate),
+        }))
+      : null;
+
+    const updatedAsset = await prisma.assets.update({
+      where: { id },
       data: {
-        memberId,
-        cooperativeId: lastSavingsRecord?.cooperativeId,
-        savingsDeposits: 0,
-        withdrawals: amount,
-        savingsBalance: newBalance,
-        totalWithdrawals: newTotalWithdrawals,
-        grandTotal: newBalance,
+        assetName,
+        assetShortDescription,
+        assetLongDescription,
+        assetPrice: assetPrice ? parseInt(assetPrice, 10) : undefined,
+        img1: uploadedImages.img1 || asset.img1,
+        img2: uploadedImages.img2 || asset.img2,
+        img3: uploadedImages.img3 || asset.img3,
+        formPrice: formPrice ? parseInt(formPrice, 10) : undefined,
+        priceInterestRate: priceInterestRate ? parseFloat(priceInterestRate) : undefined,
+        minDurationMonths: parsedInterestRates?.[0]?.minDurationMonths || asset.minDurationMonths,
+        maxDurationMonths: parsedInterestRates?.[0]?.maxDurationMonths || asset.maxDurationMonths,
+        durationInterestRate: parsedInterestRates?.[0]?.durationInterestRate || asset.durationInterestRate,
       },
     });
 
-    // Initiate bank transfer using Flutterwave (this requires additional integration)
-    const transferResponse = await flutterwaveTransferToBank(amount, memberId);
-    res.status(200).json(withdrawal);
+    res.status(200).json({ message: "Asset updated successfully", asset: updatedAsset });
   } catch (error) {
-    console.error('Error processing withdrawal:', error);
-    res.status(500).json({ error: 'Failed to process withdrawal' });
+    console.error("Error updating asset:", error.message);
+    res.status(500).json({ error: "Failed to update asset", details: error.message });
+  }
+});
+
+// Route to delete an asset
+app.delete("/deleteAssets/:id", verifyFirebaseToken, async (req, res) => {
+  try {
+    const { uid, role, cooperativeId } = req.user;
+
+    if (role !== "cooperative-admin") {
+      return res.status(403).json({ error: "Only cooperative admins can delete assets." });
+    }
+
+    const { id } = req.params;
+    const asset = await prisma.assets.findUnique({ where: { id } });
+
+    if (!asset || asset.cooperativeId !== cooperativeId) {
+      return res.status(404).json({ error: "Asset not found or unauthorized access" });
+    }
+
+    await prisma.assets.delete({ where: { id } });
+
+    res.status(200).json({ message: "Asset deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting asset:", error.message);
+    res.status(500).json({ error: "Failed to delete asset", details: error.message });
+  }
+});
+
+app.get('/assets-requested-table', verifyFirebaseToken, async (req, res) => {
+  const { memberId, role, cooperativeId } = req.user; // Extracted from token (decoded middleware)
+
+  try {
+    if (role === 'cooperative-admin') {
+      // Cooperative admin: Fetch all requests for their cooperative
+      const requests = await prisma.assetsRequested.findMany({
+        where: { cooperativeId },
+        include: {
+          member: {
+            include: { memberDetails: true },
+          },
+        },
+      });
+
+      return res.status(200).json({ success: true, data: requests });
+    } else if (role === 'member') {
+      // Member: Fetch only their own asset requests
+      const requests = await prisma.assetsRequested.findMany({
+        where: { memberId: memberId },
+        include: {
+          member: {
+            include: { memberDetails: true },
+          },
+        },
+      });
+
+      return res.status(200).json({ success: true, data: requests });
+    } else {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+  } catch (error) {
+    console.error('Error fetching asset requests:', error.message);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+app.post('/assets-requested', async (req, res) => {
+  const { memberId, cooperativeId, assetId, durationOfLoan, unitsRequested } = req.body;
+
+  try {
+    if (!memberId || !cooperativeId || !assetId || !durationOfLoan || !unitsRequested) {
+      return res.status(400).json({ error: "Missing required inputs" });
+    }
+
+    console.log("Request Body:", req.body);
+
+    const member = await prisma.member.findUnique({
+      where: { id: memberId },
+      include: { memberDetails: true },
+    });
+
+    const cooperative = await prisma.cooperative.findUnique({
+      where: { id: cooperativeId },
+    });
+
+    const asset = await prisma.assets.findUnique({
+      where: { id: assetId },
+    });
+
+    if (!member || !cooperative || !asset) {
+      return res.status(404).json({ error: "Resource not found" });
+    }
+
+    if (asset.unitNumber < unitsRequested) {
+      return res.status(400).json({ error: "Insufficient units available for this asset" });
+    }
+
+    console.log("Units Available:", asset.unitNumber, "Units Requested:", unitsRequested);
+
+    const adminSettings = await prisma.cooperativeAdminSettings.findMany({
+      where: { cooperativeId },
+    });
+
+    if (!adminSettings.length) {
+      return res.status(404).json({ error: "Admin settings not found for this cooperative" });
+    }
+
+    const { gracePeriod, loanUpperLimit } = adminSettings[0];
+
+    const contributions = await prisma.memberSavings.aggregate({
+      where: { memberId, type: "contribution" },
+      _sum: { savingsDeposits: true },
+    });
+
+    const savings = await prisma.memberSavings.aggregate({
+      where: { memberId, type: "savings" },
+      _sum: { savingsDeposits: true },
+    });
+
+    const totalContributions = contributions._sum.savingsDeposits || 0;
+    const totalSavings = savings._sum.savingsDeposits || 0;
+
+    const loans = await prisma.loansRequested.aggregate({
+      where: { memberId, approved: true },
+      _sum: { expectedAmountToBePaidBack: true },
+    });
+
+    const totalLoans = loans._sum.expectedAmountToBePaidBack || 0;
+
+    const outstandingLoans = await prisma.loansRequested.findMany({
+      where: {
+        memberId,
+        approved: true,
+        expectedReimbursementDate: { lt: new Date() },
+      },
+    });
+
+    const filteredOutstandingLoans = outstandingLoans.filter(
+      loan => loan.amountPaidBack < loan.expectedAmountToBePaidBack
+    );
+
+    for (const loan of filteredOutstandingLoans) {
+      const graceDate = new Date(loan.expectedReimbursementDate);
+      graceDate.setDate(graceDate.getDate() + gracePeriod * 7);
+      if (new Date() > graceDate) {
+        const user = await admin.auth().getUser(member.firebaseUid);
+        const existingClaims = user.customClaims || {};
+        await admin.auth().setCustomUserClaims(member.firebaseUid, {
+          ...existingClaims,
+          'asset-debtor': true,
+        });
+        return res.status(400).json({
+          error: "Member is ineligible for loans due to unpaid previous loans",
+        });
+      }
+    }
+
+    const approvedAssets = await prisma.assetsRequested.findMany({
+      where: {
+        memberId,
+        approved: true,
+      },
+      select: {
+        totalPrice: true,
+      },
+    });
+
+    const totalApprovedAssetPrice = approvedAssets.reduce(
+      (sum, asset) => sum + parseFloat(asset.totalPrice || 0),
+      0
+    );
+
+    const loanLimit = totalContributions * loanUpperLimit;
+    const currentAssetPrice = asset.assetPrice * (1 + asset.priceInterestRate / 100) * (1 + asset.durationInterestRate / 100);
+    const totalLoan = totalLoans + totalApprovedAssetPrice + currentAssetPrice;
+
+    console.log("Current Asset Price:", currentAssetPrice);
+    console.log("Total Approved Asset Price:", totalApprovedAssetPrice);
+    console.log("Total Loans:", totalLoans);
+    console.log("Total Loan:", totalLoan);
+
+    if (totalLoan > totalSavings) {
+      return res.status(400).json({
+        error: "Member is ineligible for loans as total loans exceed total savings.",
+      });
+    }
+
+    if (totalLoan > loanLimit) {
+      return res.status(400).json({
+        error: "Loan request exceeds allowable limit based on contributions and existing loans.",
+      });
+    }
+
+    console.log(`Member ${memberId} is eligible for the loan.`);
+
+    const newAssetRequest = await prisma.$transaction(async (prisma) => {
+      await prisma.assets.update({
+        where: { id: assetId },
+        data: { unitNumber: asset.unitNumber - unitsRequested },
+      });
+
+      return await prisma.assetsRequested.create({
+        data: {
+          memberId,
+          cooperativeId,
+          surname: member.surname,
+          firstName: member.firstName,
+          middleName: member.memberDetails?.middleName || "",
+          dateOfApplication: new Date(),
+          durationOfLoan,
+          assetName: asset.assetName,
+          assetPrice: asset.assetPrice.toString(),
+          assetShortDescription: asset.assetShortDescription,
+          img1: asset.img1,
+          nameOfSurety1: member.memberDetails?.nextOfKinName || "N/A",
+          surety1MembersNo: member.registrationNumber || "N/A",
+          surety1telePhone: member.memberDetails?.nextOfKinPhone || "N/A",
+          nameOfSurety2: "Placeholder Surety 2",
+          surety2MembersNo: "N/A",
+          surety2telePhone: "N/A",
+          loanInterest: ((1 + asset.priceInterestRate / 100) * (1 + asset.durationInterestRate / 100) - 1) * 100,
+          totalPrice: currentAssetPrice,
+          expectedReimbursementDate: new Date(new Date().setMonth(new Date().getMonth() + durationOfLoan)),
+          approved: false,
+          rejected: false,
+          pending: true,
+        },
+      });
+    });
+
+    console.log("New Asset Request:", newAssetRequest);
+
+    return res.status(201).json({ success: true, assetRequest: newAssetRequest });
+  } catch (error) {
+    console.error("Error creating asset request:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+app.patch('/assets-requested/:id/update-status', async (req, res) => {
+  const { id } = req.params; // The asset request ID
+  const { status } = req.body; // The status to update: "approved", "rejected", or "pending"
+
+  if (!['approved', 'rejected', 'pending'].includes(status)) {
+    return res.status(400).json({ error: "Invalid status value" });
+  }
+
+  try {
+    // Update the status of the asset request
+    const updatedAssetRequest = await prisma.assetsRequested.update({
+      where: { id },
+      data: {
+        approved: status === 'approved',
+        rejected: status === 'rejected',
+        pending: status === 'pending',
+      },
+    });
+
+    return res.status(200).json({ success: true, assetRequest: updatedAssetRequest });
+  } catch (error) {
+    console.error("Error updating asset request status:", error.message);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
