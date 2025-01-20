@@ -824,7 +824,7 @@ app.post('/register-member', async (req, res) => {
 // KYC submission route: /member-kyc
 
 
-app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, res) => {
+app.post('/member-kyc', verifyFirebaseToken, upload.fields([{ name: 'img', maxCount: 1 }, { name: 'idImg', maxCount: 1 }]), async (req, res) => {
 
   try {
 
@@ -838,31 +838,48 @@ app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, r
     return res.status(400).json({ error: "Member ID or KYC data is missing." });
   }
 
+  if (!memberId || Object.keys(memberKycData).length === 0) {
+    return res.status(400).json({ error: "Member ID or KYC data is missing." });
+  }
+
   let imageUrl = null;
-  if (req.file) {
+  let idImageUrl = null;
+
+  if (req.files?.img) {
     try {
-      console.log("Uploading image to Cloudinary...");
-      imageUrl = await uploadImageToCloudinary(req.file.buffer);
+      console.log("Uploading profile image to Cloudinary...");
+      imageUrl = await uploadImageToCloudinary(req.files.img[0].buffer);
     } catch (error) {
-      console.error("Error uploading image to Cloudinary:", error);
-      return res.status(500).json({ error: "Failed to upload image" });
+      console.error("Error uploading profile image:", error);
+      return res.status(500).json({ error: "Failed to upload profile image" });
     }
   }
-    // Fetch the member's registration number
-    const member = await prisma.member.findUnique({
-      where: { id: memberId },
-      select: { registrationNumber: true },
-    });
 
-    if (!member) {
-      return res.status(404).json({ error: "Member not found" });
+  if (req.files?.idImg) {
+    try {
+      console.log("Uploading ID card image to Cloudinary...");
+      idImageUrl = await uploadImageToCloudinary(req.files.idImg[0].buffer);
+    } catch (error) {
+      console.error("Error uploading ID card image:", error);
+      return res.status(500).json({ error: "Failed to upload ID card image" });
     }
+  }
 
-    const membersDetails = await prisma.membersDetails.create({
-      data: {
-        member: { connect: { id: memberId } },
-        registrationNumber: member.registrationNumber, // Use the fetched registration number
-        img: imageUrl || null,
+  const member = await prisma.member.findUnique({
+    where: { id: memberId },
+    select: { registrationNumber: true },
+  });
+
+  if (!member) {
+    return res.status(404).json({ error: "Member not found" });
+  }
+
+  const membersDetails = await prisma.membersDetails.create({
+    data: {
+      member: { connect: { id: memberId } },
+      registrationNumber: member.registrationNumber,
+      img: imageUrl || null,
+      idImg: idImageUrl || null,
         middleName: memberKycData.middleName,
         dateOfEntry: new Date(memberKycData.dateOfEntry).toISOString(),
         telephone1: memberKycData.telephone1,
@@ -886,6 +903,8 @@ app.post('/member-kyc', verifyFirebaseToken, upload.single('img'), async (req, r
         nextOfKinPhone: memberKycData.nextOfKinPhone,
         nextOfKinPhone2: memberKycData.nextOfKinPhone2,
         sponsor: memberKycData.sponsor,
+        nameOfSurety1: memberKycData.nameOfSurety1,
+        surety1MembersNo: memberKycData.surety1MembersNo
       },
     });
 
@@ -1203,14 +1222,14 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
 
     console.log('All Loans Fetched:', allLoans);
 
-    const allAssets = await prisma.assetsRequested.findMany({
-      where: {
-        // filter, 
-        approved:true},
-      include: { member: { select: { firstName: true, surname: true, email: true } } },
-    });
+    // const allAssets = await prisma.assetsRequested.findMany({
+    //   where: {
+    //     // filter, 
+    //     approved:true},
+    //   include: { member: { select: { firstName: true, surname: true, email: true } } },
+    // });
 
-    console.log('All Assets Fetched:', allAssets);
+    // console.log('All Assets Fetched:', allAssets);
 
     // Helper functions for calculations
     const calculateTotalAmount = (records, field) =>
@@ -1228,16 +1247,16 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
     };
 
     
-    const calculateAssetMonthlyStats = (records) => {
-      const assetStats = {};
-      records.forEach((record) => {
-        const month = record.dateOfApplication.toISOString().slice(0, 7); // "YYYY-MM"
-        if (!stats[month]) stats[month] = { count: 0, total: 0 };
-        stats[month].count += 1;
-        stats[month].total += record.totalPrice || 0;
-      });
-      return assetStats;
-    };
+    // const calculateAssetMonthlyStats = (records) => {
+    //   const assetStats = {};
+    //   records.forEach((record) => {
+    //     const month = record.dateOfApplication.toISOString().slice(0, 7); // "YYYY-MM"
+    //     if (!stats[month]) stats[month] = { count: 0, total: 0 };
+    //     stats[month].count += 1;
+    //     stats[month].total += record.totalPrice || 0;
+    //   });
+    //   return assetStats;
+    // };
 
     const calculateYearlyStats = (records) => {
       const stats = {};
@@ -1250,27 +1269,27 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
       return stats;
     };
 
-    const calculateAssetYearlyStats = (records) => {
-      const assetStats = {};
-      records.forEach((record) => {
-        const year = record.dateOfApplication.toISOString().slice(0, 4); // "YYYY"
-        if (!stats[year]) stats[year] = { count: 0, total: 0 };
-        stats[year].count += 1;
-        stats[year].total += record.expectedAmountToBePaidBack || 0;
-      });
-      return assetStats;
-    };
+    // const calculateAssetYearlyStats = (records) => {
+    //   const assetStats = {};
+    //   records.forEach((record) => {
+    //     const year = record.dateOfApplication.toISOString().slice(0, 4); // "YYYY"
+    //     if (!stats[year]) stats[year] = { count: 0, total: 0 };
+    //     stats[year].count += 1;
+    //     stats[year].total += record.expectedAmountToBePaidBack || 0;
+    //   });
+    //   return assetStats;
+    // };
 
     // Calculate stats
     const monthlyStats = calculateMonthlyStats(allLoans);
     const yearlyStats = calculateYearlyStats(allLoans);
-    const monthlyAssetStats = calculateMonthlyStats(allAssets);
-    const yearlyAssetStats = calculateYearlyStats(allAssets);
+    // const monthlyAssetStats = calculateMonthlyStats(allAssets);
+    // const yearlyAssetStats = calculateYearlyStats(allAssets);
     const totalAmountRequested = calculateTotalAmount(allLoans, 'amountRequired');
     const totalAmountGranted = calculateTotalAmount(allLoans, 'amountGranted');
-    const totalAssetsApproved = calculateTotalAmount(allLoans, 'totalPrice');
+    // const totalAssetsApproved = calculateTotalAmount(allLoans, 'totalPrice');
     const totalLoans = allLoans.length;
-    const totalAssets = allAssets.length;
+    // const totalAssets = allAssets.length;
 
     // Defaulter logic
     const now = new Date();
@@ -1306,13 +1325,13 @@ app.get('/loan-stats', verifyFirebaseToken, async (req, res) => {
     const loanStats = {
       totalAmountRequested,
       totalAmountGranted,
-      totalAssetsApproved,
+      // totalAssetsApproved,
       totalLoans,
-      totalAssets,
+      // totalAssets,
       monthly: monthlyStats,
       yearly: yearlyStats,
-      monthly: monthlyAssetStats,
-      yearly: yearlyAssetStats,
+      // monthly: monthlyAssetStats,
+      // yearly: yearlyAssetStats,
       defaulters,
     };
 
@@ -2135,7 +2154,6 @@ app.get('/member/credit-score', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-
 // File: /server/routes/memberStats.js
 app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
   try {
@@ -2491,144 +2509,247 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
   }
 });
 
+
+// File: /server/routes/memberStats.js
 app.get('/reports/savings-stats', verifyFirebaseToken, async (req, res) => {
   try {
-    // Check Authorization Header
+    console.log('Incoming request to /reports/savings-stats');
+
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized. No token provided.' });
     }
 
-    // Decode the token
     const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
     const { cooperativeId: cooperativeIdFromToken, uid: memberId, role } = decodedToken;
 
-    console.log('Role:', role);
-    console.log('Generating Reports for Member ID:', memberId);
+    console.log('Role:', role, 'Member ID:', memberId);
 
     let cooperativeId = cooperativeIdFromToken;
 
-    // Verify if the role is cooperative-admin
     if (role === 'member') {
-      // Fetch cooperative ID linked to the member
       const member = await prisma.member.findUnique({
         where: { id: memberId },
         select: { cooperativeId: true },
       });
-
       if (!member || !member.cooperativeId) {
-        console.error('Cooperative not found for member');
-        return res.status(404).json({ error: 'Cooperative not found for member' });
+        return res.status(404).json({ error: 'Cooperative not found for member.' });
       }
-
       cooperativeId = member.cooperativeId;
     }
 
-    console.log('Resolved Cooperative ID:', cooperativeId);
-
-    // Fetch admin settings
     const adminSettings = await prisma.cooperativeAdminSettings.findFirst({
       where: { cooperativeId },
-      select: { monthsToLoan: true, gracePeriod: true, increaseRate: true },
+      select: { loanFormPrice: true, shareCapital: true },
     });
 
-    console.log('Admin Settings:', adminSettings || 'No settings found');
+    const assets = await prisma.assets.findFirst({
+      where: { cooperativeId },
+      select: { formPrice: true },
+    });
 
-    // Fetch data based on role
-    let allSavings, allLoans, allAssetsRequested;
+    const filter = role === 'cooperative-admin' ? { cooperativeId } : { memberId };
 
-    if (role === 'cooperative-admin') {
-      // Fetch data for all members in the cooperative
-      allSavings = await prisma.memberSavings.findMany({ where: { cooperativeId } });
-      allLoans = await prisma.loansRequested.findMany({ where: { cooperativeId } });
-      allAssetsRequested = await prisma.assetsRequested.findMany({
-        where: { cooperativeId, approved: true },
-      });
-    } else if (role === 'member') {
-      // Fetch data for the specific member
-      allSavings = await prisma.memberSavings.findMany({ where: { memberId } });
-      allLoans = await prisma.loansRequested.findMany({ where: { memberId } });
-      allAssetsRequested = await prisma.assetsRequested.findMany({
-        where: { memberId, approved: true },
-      });
-    }
+    const allSavings = await prisma.memberSavings.findMany({
+      where: filter,
+      select: { id: true, type: true, savingsDeposits: true, dateOfEntry: true },
+    });
 
-    console.log('All Savings:', allSavings.length);
-    console.log('All Loans:', allLoans.length);
-    console.log('All Approved Assets:', allAssetsRequested.length);
+    const allLoansRequested = await prisma.loansRequested.findMany({
+      where: filter,
+      select: { id: true, approved: true, amountGranted: true, loanInterest: true, expectedAmountToBePaidBack: true, repaid: true, dateOfApplication: true },
+    });
 
-    // Aggregate data by yearly, monthly, and all-time
-    const aggregateByPeriod = (records, dateField) => {
-      const yearly = {};
-      const monthly = {};
-      let total = 0;
+    const allAssetsRequested = await prisma.assetsRequested.findMany({
+      where: filter,
+      select: { id: true, approved: true, totalPrice: true, loanInterest: true, repaid: true, dateOfApplication: true },
+    });
 
-      records.forEach((record) => {
-        const date = new Date(record[dateField]);
-        const year = date.getFullYear();
-        const month = `${year}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const debtors = await prisma.debtor.findMany({ where: filter });
+    const assetDebtors = await prisma.assetDebtor.findMany({ where: filter });
+    const defaulters = await prisma.defaulter.findMany({ where: filter });
 
-        yearly[year] = (yearly[year] || 0) + (record.amount || 0);
-        monthly[month] = (monthly[month] || 0) + (record.amount || 0);
-        total += record.amount || 0;
-      });
+    let totalSavings = 0;
+    let totalContributions = 0;
+    let shareCapital = adminSettings ? adminSettings.shareCapital : 0;
 
-      return { yearly, monthly, total };
+    allSavings.forEach((saving) => {
+      if (saving.type === 'savings') {
+        totalSavings += saving.savingsDeposits;
+      } else if (saving.type === 'contribution') {
+        totalContributions += saving.savingsDeposits;
+      }
+    });
+
+    const totalLoans = allLoansRequested.reduce((sum, loan) => sum + loan.expectedAmountToBePaidBack, 0);
+    const totalApprovedLoans = allLoansRequested.filter((loan) => loan.approved).reduce((sum, loan) => sum + loan.expectedAmountToBePaidBack, 0);
+
+    const totalAssets = allAssetsRequested.reduce((sum, asset) => sum + asset.totalPrice, 0);
+    const totalApprovedAssets = allAssetsRequested.filter((asset) => asset.approved).reduce((sum, asset) => sum + asset.totalPrice, 0);
+
+    // Calculate profits grouped by time frames
+    const groupedProfits = {};
+    const groupedEntries = {};
+
+    const calculateProfit = (dateKey, profit, entry) => {
+      if (!groupedProfits[dateKey]) {
+        groupedProfits[dateKey] = 0;
+        groupedEntries[dateKey] = [];
+      }
+      groupedProfits[dateKey] += profit;
+      groupedEntries[dateKey].push(entry);
     };
 
-    const savingsStats = aggregateByPeriod(allSavings, 'dateOfEntry');
-    const loanStats = aggregateByPeriod(allLoans, 'dateOfApplication');
-    const assetStats = aggregateByPeriod(allAssetsRequested, 'dateRequested');
+    // Loan profits
+    allLoansRequested.forEach((loan) => {
+      if (loan.repaid) {
+        const dateKey = loan.dateOfApplication.toISOString().slice(0, 7); // e.g., "2024-12"
+        const loanInterestProfit = (loan.expectedAmountToBePaidBack * loan.loanInterest) / 100;
+        const loanFormProfit = adminSettings ? adminSettings.loanFormPrice : 0;
+        calculateProfit(dateKey, loanInterestProfit + loanFormProfit, {
+          type: 'loan',
+          id: loan.id,
+          interestProfit: loanInterestProfit,
+          formProfit: loanFormProfit,
+        });
+      }
+    });
 
-    console.log('Savings Stats:', savingsStats);
-    console.log('Loan Stats:', loanStats);
-    console.log('Asset Stats:', assetStats);
+    // Asset profits
+    allAssetsRequested.forEach((asset) => {
+      if (asset.repaid) {
+        const dateKey = asset.dateOfApplication.toISOString().slice(0, 7); // e.g., "2024-12"
+        const assetInterestProfit = (asset.totalPrice * asset.loanInterest) / 100;
+        const assetFormProfit = assets ? assets.formPrice : 0;
+        calculateProfit(dateKey, assetInterestProfit + assetFormProfit, {
+          type: 'asset',
+          id: asset.id,
+          interestProfit: assetInterestProfit,
+          formProfit: assetFormProfit,
+        });
+      }
+    });
 
-    // Fetch member information for members
-    let memberInfo = null;
-    let memberDetails = null;
-    if (role === 'member') {
-      memberInfo = await prisma.member.findUnique({
-        where: { id: memberId },
-        select: { firstName: true, surname: true, email: true },
-      });
+    // Add share capital to the month of the earliest contribution deposit
+    if (allSavings.length > 0) {
+      const earliestContribution = allSavings
+        .filter((saving) => saving.type === 'contribution')
+        .sort((a, b) => new Date(a.dateOfEntry) - new Date(b.dateOfEntry))[0];
 
-      memberDetails = await prisma.membersDetails.findUnique({
-        where: { memberId },
-        select: {
-          amountPaid: true,
-          img: true,
-          telephone1: true,
-          permanentHomeAddress: true,
-          nextOfKinName: true,
-          nextOfKinPhone: true,
-          bvn: true,
-          residentialAddress: true,
-        },
-      });
-
-      console.log('Member Info:', memberInfo || 'No member info found');
-      console.log('Member Details:', memberDetails || 'No member details found');
+      if (earliestContribution) {
+        const firstSavingDateKey = earliestContribution.dateOfEntry.toISOString().slice(0, 7);
+        calculateProfit(firstSavingDateKey, shareCapital, {
+          type: 'shareCapital',
+          amount: shareCapital,
+        });
+      }
     }
 
-    // Response
-    res.json({
-      role,
-      memberId,
-      cooperativeId,
-      adminSettings,
-      memberInfo,
-      memberDetails,
-      savingsStats,
-      loanStats,
-      assetStats,
-    });
+    const totalProfit = Object.values(groupedProfits).reduce((sum, profit) => sum + profit, 0);
+
+    const totalMembers = await prisma.member.count({ where: { cooperativeId } });
+    const totalAssetsCount = await prisma.assets.count({ where: { cooperativeId } });
+
+    // Grouping by time frames
+    const groupByTimeFrame = (data, dateField) => {
+      return data.reduce((acc, item) => {
+        const dateKey = item[dateField].toISOString().slice(0, 7); // e.g., "2024-12"
+        if (!acc[dateKey]) {
+          acc[dateKey] = {
+            totalSavings: 0,
+            totalContributions: 0,
+            totalLoansRequested: 0,
+            totalLoansApproved: 0,
+            totalLoanAmount: 0,
+            totalApprovedLoanAmount: 0,
+            totalAssetsRequested: 0,
+            totalAssetsApproved: 0,
+            totalAssetAmount: 0,
+            totalApprovedAssetAmount: 0,
+            profit: 0,
+            entries: [],
+          };
+        }
+
+        if (item.type === 'savings') {
+          acc[dateKey].totalSavings += item.savingsDeposits;
+          acc[dateKey].entries.push({
+            type: 'savings',
+            id: item.id,
+            amount: item.savingsDeposits,
+          });
+        } else if (item.type === 'contribution') {
+          acc[dateKey].totalContributions += item.savingsDeposits;
+          acc[dateKey].entries.push({
+            type: 'contribution',
+            id: item.id,
+            amount: item.savingsDeposits,
+          });
+        } else if (item.amountGranted) {
+          acc[dateKey].totalLoansRequested += 1;
+          acc[dateKey].totalLoanAmount += item.expectedAmountToBePaidBack;
+          if (item.approved) {
+            acc[dateKey].totalLoansApproved += 1;
+            acc[dateKey].totalApprovedLoanAmount += item.expectedAmountToBePaidBack;
+          }
+        } else if (item.totalPrice) {
+          acc[dateKey].totalAssetsRequested += 1;
+          acc[dateKey].totalAssetAmount += item.totalPrice;
+          if (item.approved) {
+            acc[dateKey].totalAssetsApproved += 1;
+            acc[dateKey].totalApprovedAssetAmount += item.totalPrice;
+          }
+        }
+
+        acc[dateKey].profit = groupedProfits[dateKey] || 0;
+        acc[dateKey].entries = groupedEntries[dateKey] || [];
+
+        return acc;
+      }, {});
+    };
+
+    const groupedData = {
+      savings: groupByTimeFrame(allSavings, 'dateOfEntry'),
+      loans: groupByTimeFrame(allLoansRequested, 'dateOfApplication'),
+      assets: groupByTimeFrame(allAssetsRequested, 'dateOfApplication'),
+    };
+
+    const report = {
+      totalMembers,
+      totalAssetsCount,
+      savings: { totalSavings, totalContributions, shareCapital },
+      loans: {
+        totalRequested: allLoansRequested.length,
+        approved: allLoansRequested.filter((loan) => loan.approved).length,
+        totalAmount: totalLoans,
+        totalApprovedAmount: totalApprovedLoans,
+      },
+      assets: {
+        totalRequested: allAssetsRequested.length,
+        approved: allAssetsRequested.filter((asset) => asset.approved).length,
+        totalAmount: totalAssets,
+        totalApprovedAmount: totalApprovedAssets,
+      },
+      debtors: {
+        totalDebtors: debtors.length + assetDebtors.length,
+        totalDebtAmount: debtors.reduce((sum, debtor) => sum + debtor.amount, 0) +
+          assetDebtors.reduce((sum, debtor) => sum + debtor.amount, 0),
+      },
+      totalProfit,
+      groupedData,
+    };
+
+    console.log('Generated Report:', JSON.stringify(report, null, 2));
+
+    res.status(200).json(report);
   } catch (error) {
-    console.error('Error generating report:', error);
-    res.status(500).json({ error: 'Error generating report' });
+    console.error('Error generating savings stats report:', error);
+    res.status(500).json({ error: 'Failed to generate report', details: error.message });
   }
 });
+
+
 
 // app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
 //   try {

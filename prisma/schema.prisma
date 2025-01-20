@@ -128,7 +128,10 @@ nextOfKinName     String
 nextOfKinPhone    String
 nextOfKinPhone2   String
 sponsor           String
-  img               String? // <-- This field is required
+nameOfSurety1         String?
+surety1MembersNo      String?
+img             String? // <-- This field is required
+idImg           String?
 }
 
 model MemberSavings {
@@ -209,14 +212,14 @@ model LoansRequested {
   dateOfApplication     DateTime?
   durationOfLoan        Int
   balanceInTheSavingsAccount  String?
-  bvn                   String
-  nameOfSurety1         String
-  surety1MembersNo      String
-  surety1telePhone      String
+  bvn                   String?
+  nameOfSurety1         String?
+  surety1MembersNo      String?
+  surety1telePhone      String?
   surety1balanceInTheSavingsAccount String?
-  nameOfSurety2         String
-  surety2MembersNo      String
-  surety2telePhone      String
+  nameOfSurety2         String?
+  surety2MembersNo      String?
+  surety2telePhone      String?
   surety2balanceInTheSavingsAccount String?
   amountGuaranteed      String?
   paymentVoucherNO      String?
@@ -233,6 +236,7 @@ model LoansRequested {
   approved              Boolean?
   rejected              Boolean?
   pending               Boolean?
+  repaid                Boolean?
   cooperativeId         String
 }
 
@@ -419,6 +423,7 @@ loanInterest          Int?
  approved              Boolean?
   rejected              Boolean?
   pending               Boolean?
+    repaid                Boolean?
   cooperativeId         String
 }
 
