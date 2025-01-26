@@ -1980,9 +1980,9 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
     let adjustedAmount = amount;
 
     // Add shareCapital if it's the first deposit
-    if (!existingSavings) {
-      adjustedAmount += shareCapital;
-    }
+    // if (!existingSavings) {
+    //   adjustedAmount += shareCapital;
+    // }
 
     const lastSavingsRecord = await prisma.memberSavings.findFirst({
       where: { memberId },
@@ -2022,6 +2022,24 @@ app.post('/member/savings', verifyFirebaseToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to process savings deposit' });
   }
 });
+
+app.get('/member/get-savings', verifyFirebaseToken, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const memberId = await getMemberIdFromAuth(authHeader);
+
+    const savingsRecords = await prisma.memberSavings.findMany({
+      where: { memberId },
+      orderBy: { dateOfEntry: 'desc' },
+    });
+
+    res.status(200).json(savingsRecords);
+  } catch (error) {
+    console.error('Error fetching savings records:', error);
+    res.status(500).json({ error: 'Failed to fetch savings records' });
+  }
+});
+
 
 app.get('/member/first-deposit', verifyFirebaseToken, async (req, res) => {
   try {
@@ -2367,29 +2385,29 @@ app.get('/member/savings/stats', verifyFirebaseToken, async (req, res) => {
     const nextDueDate = new Date(lastContributionDate);
     nextDueDate.setMonth(nextDueDate.getMonth() + 1);
 
-    if (now > nextDueDate) {
-      const graceEndDate = new Date(nextDueDate);
-      graceEndDate.setDate(graceEndDate.getDate() + gracePeriod * 7);
+    // if (now > nextDueDate) {
+    //   const graceEndDate = new Date(nextDueDate);
+    //   graceEndDate.setDate(graceEndDate.getDate() + gracePeriod * 7);
 
-      if (now > graceEndDate) {
-        defaulter = true;
-        console.log('Adding to Defaulter model for contributions.');
+    //   if (now > graceEndDate) {
+    //     defaulter = true;
+    //     console.log('Adding to Defaulter model for contributions.');
 
-        await prisma.defaulter.create({
-          data: {
-            memberId,
-            dateOfEntry: saving.dateOfEntry,
-            surname: memberDetails.surname,
-            firstName: memberDetails.firstName,
-            telephone: memberDetails.telephone1,
-            savingsDeposit: saving.savingsDeposits,
-            amountOwed: memberDetails.amountPaid,
-            graceEndDate,
-          },
-        });
-        console.log(`Member ID: ${memberId} transferred to Debtor model for contributions.`);
-      }
-    }
+    //     await prisma.defaulter.create({
+    //       data: {
+    //         memberId,
+    //         // dateOfEntry: saving.dateOfEntry,
+    //         surname: memberDetails.surname,
+    //         firstName: memberDetails.firstName,
+    //         telephone: memberDetails.telephone1,
+    //         // savingsDeposit: saving.savingsDeposits,
+    //         amountOwed: memberDetails.amountPaid,
+    //         graceEndDate,
+    //       },
+    //     });
+    //     console.log(`Member ID: ${memberId} transferred to Debtor model for contributions.`);
+    //   }
+    // }
 
  // Handle asset defaults
     for (const asset of allAssetsRequested) {
