@@ -521,6 +521,10 @@ app.post('/register', async (req, res) => {
     const registrationNumber = generateCooperativeRegistrationNumber();
     console.log('Generated registration number:', registrationNumber);
 
+   // Send email verification using Firebase's default email template
+    await admin.auth().generateEmailVerificationLink(email);
+    console.log('Verification email sent to:', email);
+
     // Set custom claims
     await admin.auth().setCustomUserClaims(userRecord.uid, {
       role: 'cooperative-admin',
@@ -776,8 +780,8 @@ app.post('/register-member', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Generate a unique registration number
-    const registrationNumber = `RG${Date.now()}${Math.random().toString().slice(2, 10)}M`;
+      // Generate a unique registration number (6 characters between RG- and M)
+    const registrationNumber = `RG-${Math.random().toString(36).substr(2, 6).toUpperCase()}-M`;
 
     // Create Firebase user
     const userRecord = await admin.auth().createUser({
@@ -785,6 +789,10 @@ app.post('/register-member', async (req, res) => {
       password: password,
       displayName: `${firstName} ${surname}`,
     });
+
+ // Send email verification using Firebase's default email template
+    await admin.auth().generateEmailVerificationLink(email);
+    console.log('Verification email sent to:', email);
 
     // Set custom claims for the member
     await admin.auth().setCustomUserClaims(userRecord.uid, {
